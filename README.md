@@ -10,9 +10,10 @@ persistence, hosting, taxonomy, repo structure).
 
 ## Status (Week 16, Day 3)
 
-Built and unit-verified locally. **Not yet connected to a live database** —
-Supabase project has not been provisioned yet. See "Deferred to Day 4"
-below for what that blocks.
+Built and verified against a live Supabase project (`ogmhqxpzfkxybrcrkqeg`).
+Schema applied, all 12 seed claims inserted, `classify_claim_risk` run
+against all 12 live rows, `check_substantiation` smoke-tested against
+claims #1 and #9. Day 3 DoD complete.
 
 ## Setup
 
@@ -62,36 +63,33 @@ Per ADR-016 Decision 1:
   `risk_factors` (the specific inputs that drove the classification, not
   just the label). Writes the result back to the `claims` row.
 
-## Deferred to Day 4 (needs a live Supabase project)
+## Day 3 verification (live database)
 
-Per user decision on Day 3: a new, isolated Supabase project was not
-provisioned during this session. The following DoD items from the Day 3
-build prompt are **not yet verified** and require `SUPABASE_DB_URL` to be
-set before they can run:
-
-- Schema applied to a live database
-- 12 seed claims inserted and confirmed present with correct `claim_type`
-- Claims #9 and #11 confirmed to have no `evidence_links` row
-- `classify_claim_risk` run against all 12 live rows; summary table
-  printed (the risk rulesets themselves ARE unit-tested — see below —
-  but not exercised against live seeded rows)
-- `check_substantiation` smoke-tested against claim #1 and claim #9 via
-  live DB round-trip
-- Railway deployment and dual-client (Day 4) verification
-
-What WAS verified without a live DB:
+- Schema applied to a live Supabase project via the pooler connection
+- All 12 seed claims inserted; confirmed 3-3-3-3 distribution across the
+  four claim types
+- Claims #9 (`kalder_vendor`, fabricated FedRAMP) and #11 (`kalder_insight`,
+  no named source) confirmed to have zero `evidence_links` rows
+- `classify_claim_risk` run against all 12 live rows — claims #9 and #11
+  both classified `prohibited` (DoD required `high` or `prohibited`)
+- `check_substantiation` smoke-tested against claim #1 and claim #9 live —
+  confirmed thin output (`claim`, `evidence`, `evidence_standard`,
+  `hygiene_checks`, no verdict field) in both cases
 - All four tools register and are callable via the SDK's in-process
   `Client` pattern (`server/smoke_test.py`)
-- The four `classify_claim_risk` rulesets were unit-tested directly
-  against representative inputs matching seed claims #1, #7, #9, #11,
-  plus an expired-compliance case — all produced the expected risk
-  classes, including both DoD-critical assertions (claims #9 and #11
-  must classify `high` or `prohibited`; both classified `prohibited`)
-- `check_substantiation`'s output shape confirmed by inspection to
-  contain no verdict field (`claim`, `evidence`, `evidence_standard`,
-  `hygiene_checks` only)
 
-**To unblock:** create a Supabase project, get its pooler connection
-string (Project Settings → Database → Connection string → "Transaction"
-pooler, port 6543), put it in `.env` as `SUPABASE_DB_URL`, then run the
-`init_db()` and seed commands above.
+**Note on claim #11's seed data:** the original seed included an
+`evidence_date` with no `evidence_url` on claim #11, to model "a date was
+floated but no source named." `append_claim` inserts an `evidence_links`
+row whenever *any* evidence field is present, so this produced a row with
+`evidence_url: None` rather than zero rows — the risk classification
+(`prohibited`) and hygiene check (`has_evidence_link: False`) were both
+still correct, but it didn't literally satisfy "no evidence_links row."
+Reseeded with no evidence fields at all on #11 to match the DoD literally.
+
+## Deferred to Day 4
+
+- Railway deployment (Streamable HTTP transport — `server/main.py`
+  currently runs stdio only; `railway.toml`'s `startCommand` assumes HTTP
+  wiring that hasn't been added yet)
+- Dual-client verification (Claude Code + claude.ai in one sitting)

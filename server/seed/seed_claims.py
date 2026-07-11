@@ -106,8 +106,9 @@ SEED_CLAIMS = [
         product_key="kalder_insight",
         claim_type="superlative",
         claim_text="The most-deployed cross-product analytics platform in IT service management",
-        # Deliberately weak: no evidence_url, no named source.
-        evidence_date="2026-05-01",
+        # Deliberately weak: no evidence_url, no named source, no evidence
+        # fields at all — append_claim skips the evidence_links insert
+        # entirely when every evidence field is None.
     ),
     dict(
         product_key="kalder_agents",
