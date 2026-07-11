@@ -8,13 +8,14 @@ marketing content.
 Architecture and rationale: see `ADR-016` (MCP vs. Agent Skills split,
 persistence, hosting, taxonomy, repo structure).
 
-## Status (Week 16, Day 4)
+## Status (Week 16, Day 5)
 
 Deployed to Railway at a public HTTPS URL, running Streamable HTTP
 (`stateless_http=True`, `json_response=True`). Cross-client state verified:
 a claim appended via Claude Code was read back correctly via claude.ai web,
 confirming both clients share the same live Supabase-backed registry.
-Day 3 and Day 4 DoD complete.
+Two Agent Skills authored and progressive-disclosure tested. Week 16 DoD
+complete.
 
 **Auth: intentionally not implemented.** Deferred per ADR-016's Resolved
 Open Questions — the registry holds only fictional Kalder data with no
@@ -62,7 +63,8 @@ Per ADR-016 Decision 1:
 - `check_substantiation` — **thin**: claim + evidence + evidence standard +
   deterministic hygiene booleans (`has_evidence_link`, `has_evidence_date`,
   `is_expired`, `has_sample_size`). No rendered verdict — that's the
-  calling agent's job, guided by the (not-yet-written) taxonomy Skill.
+  calling agent's job, guided by the `claim-review` and `claim-taxonomy`
+  Skills (see "Skills" below).
 - `classify_claim_risk` — four type-specific rulesets (performance,
   comparative, compliance, superlative), each a separate function in
   `server/tools/classify_claim_risk.py`. Returns `risk_class` plus
@@ -108,3 +110,61 @@ Reseeded with no evidence fields at all on #11 to match the DoD literally.
   same claim_id — returned the exact claim appended from Claude Code,
   confirming both clients read the same live Supabase-backed state
 - Auth explicitly deferred, not silently skipped — see note above
+
+## Skills
+
+Per ADR-016 Decision 1, both reasoning roles are absorbed by Agent Skills
+rather than MCP tools. Placed at both `skills/` (authored source of truth)
+and `.claude/skills/` (Claude Code's project-skill discovery path — see
+Day 5 verification below for why both copies exist):
+
+- `claim-review` — **procedural** skill: how to conduct a claim review
+  (retrieve → substantiate → hygiene check first → claim-strength check →
+  judge sufficiency → approve/reject/escalate → record ruling)
+- `claim-taxonomy` — **reference** skill: the four claim types (Performance,
+  Comparative, Compliance, Superlative) and their evidence standards,
+  split into deterministic (hygiene-checked) and judgment fields per type
+
+## Day 5 verification (Agent Skills, progressive disclosure)
+
+- Both skills placed at `skills/<name>/SKILL.md` (as specified) and
+  additionally at `.claude/skills/<name>/SKILL.md` — Claude Code's actual
+  project-skill discovery path. As originally specified (top-level `skills/`
+  only), Claude Code would not have discovered either skill; this was
+  caught and confirmed against a known-working example (`dino-personality`
+  in the `dino` project) before proceeding
+- Frontmatter validated manually: both `name` fields lowercase-hyphenated
+  and matching their folder names, no angle brackets, descriptions state
+  both what and when to use each skill, body token counts well under the
+  ~5,000-token recommendation (`claim-review` ~1,400 tokens, `claim-taxonomy`
+  ~970 tokens, both rough chars/4 estimates). No `anthropics/skills`
+  validator package found on npm under any tried name — not readily
+  available, so not stood up per the build prompt's own guidance
+- Progressive disclosure tested live, five steps, in this session:
+  1. Before either skill was discovered by the harness, `Skill` calls to
+     both returned `Unknown skill` — confirms tier-0 (nothing loaded)
+  2. Reading a file under `claims-desk/.claude/skills/` triggered harness
+     discovery (a `<system-reminder>` announcing both skills, name +
+     description only, ~30-100 tokens each) — this is tier 1. Notably,
+     discovery was triggered by file access under the project's
+     `.claude/skills` path, not purely by session start — a session
+     restart alone was necessary but not sufficient
+  3. A generic, unrelated query ("good Python variable naming") produced
+     a fully generic answer with no Claims-Desk-specific content —
+     confirms neither skill's full body loaded for an unmatched query
+  4. Invoking `claim-review` on the Day 4 test claim
+     (`e1cfbb40-88e1-446a-b293-7e725d139678`) loaded its full SKILL.md body
+     (tier 2) and the resulting review visibly followed the skill's exact
+     7-step workflow, explicitly applying its hygiene-first rule
+     (`has_evidence_link: false` → reject, no evidence to evaluate) —
+     ruled **REJECT**
+  5. Invoking `claim-taxonomy` on "what evidence does a Superlative claim
+     need?" loaded its full body and answered using the taxonomy's exact
+     four-type framework and field-level standard (source, category, date;
+     shortest currency window; FTC grounding) — not generic knowledge
+  6. Invoking both together (classify the same test claim's type and check
+     its evidence standard) loaded both bodies simultaneously; the answer
+     visibly combined `claim-taxonomy`'s type definition/evidence standard
+     with `claim-review`'s procedural hygiene-first decision, converging on
+     one ruling citing both — confirmed skills compose rather than
+     override each other
