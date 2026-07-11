@@ -2,14 +2,23 @@
 Claims Desk MCP server. Four tools per ADR-016 Decision 1:
 append_claim, get_claim_status, check_substantiation, classify_claim_risk.
 
-Runs over stdio by default (local dev / Claude Code). Railway deployment
-(Streamable HTTP) is a Day 4 concern per ADR-016 Decision 3 — not wired
-up here yet.
+Transport is selected at runtime via the MCP_TRANSPORT env var:
+- "stdio" (default) — local dev / Claude Code local connector
+- "streamable-http" — Railway deployment. Uses the low-level SDK's direct
+  transport path (mcp.run(transport="streamable-http")), not manual
+  FastAPI/Starlette mounting — the mount pattern has known bugs across
+  MCP Python SDK versions that a single-server build doesn't need to risk.
+
+stateless_http=True + json_response=True: the transport-layer expression
+of ADR-016's explicit-handle pattern (claim_id passed as a plain tool
+argument, no hidden session state). No auth configured — deferred per
+ADR-016's Resolved Open Questions (fictional Kalder data, no sensitive
+information in the registry); see README for the explicit rationale.
 """
 
 from __future__ import annotations
 
-import asyncio
+import os
 
 from mcp.server.fastmcp import FastMCP
 
@@ -18,7 +27,13 @@ from server.tools.get_claim_status import get_claim_status as _get_claim_status
 from server.tools.check_substantiation import check_substantiation as _check_substantiation
 from server.tools.classify_claim_risk import classify_claim_risk as _classify_claim_risk
 
-mcp = FastMCP("claims-desk")
+mcp = FastMCP(
+    "claims-desk",
+    host="0.0.0.0",
+    port=int(os.environ.get("PORT", 8000)),
+    stateless_http=True,
+    json_response=True,
+)
 
 
 @mcp.tool()
@@ -68,4 +83,5 @@ def classify_claim_risk(claim_id: str) -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    mcp.run(transport=transport)
