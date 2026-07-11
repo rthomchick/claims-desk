@@ -8,12 +8,18 @@ marketing content.
 Architecture and rationale: see `ADR-016` (MCP vs. Agent Skills split,
 persistence, hosting, taxonomy, repo structure).
 
-## Status (Week 16, Day 3)
+## Status (Week 16, Day 4)
 
-Built and verified against a live Supabase project (`ogmhqxpzfkxybrcrkqeg`).
-Schema applied, all 12 seed claims inserted, `classify_claim_risk` run
-against all 12 live rows, `check_substantiation` smoke-tested against
-claims #1 and #9. Day 3 DoD complete.
+Deployed to Railway at a public HTTPS URL, running Streamable HTTP
+(`stateless_http=True`, `json_response=True`). Cross-client state verified:
+a claim appended via Claude Code was read back correctly via claude.ai web,
+confirming both clients share the same live Supabase-backed registry.
+Day 3 and Day 4 DoD complete.
+
+**Auth: intentionally not implemented.** Deferred per ADR-016's Resolved
+Open Questions — the registry holds only fictional Kalder data with no
+sensitive information, so unauthenticated remote access is an acceptable
+risk profile for this build. Revisit if the data sensitivity changes.
 
 ## Setup
 
@@ -87,9 +93,18 @@ row whenever *any* evidence field is present, so this produced a row with
 still correct, but it didn't literally satisfy "no evidence_links row."
 Reseeded with no evidence fields at all on #11 to match the DoD literally.
 
-## Deferred to Day 4
+## Day 4 verification (Railway deployment + cross-client)
 
-- Railway deployment (Streamable HTTP transport — `server/main.py`
-  currently runs stdio only; `railway.toml`'s `startCommand` assumes HTTP
-  wiring that hasn't been added yet)
-- Dual-client verification (Claude Code + claude.ai in one sitting)
+- Deployed to Railway: `https://claims-desk-production-8424.up.railway.app`,
+  reachable via `/mcp` (Streamable HTTP)
+- MCP Inspector confirmed all four tools live and correctly schema'd
+  against the deployed URL before either client was touched
+- Claude Code connected as an MCP connector; all four tools visible and
+  callable; `append_claim` called with a dedicated connectivity-test claim
+  (`product_key: kalder_test`, distinguishable from the real seed set):
+  - claim_id: `e1cfbb40-88e1-446a-b293-7e725d139678`
+- claude.ai web connected as a custom connector, showed Connected with all
+  four tools listed, and successfully called `get_claim_status` on that
+  same claim_id — returned the exact claim appended from Claude Code,
+  confirming both clients read the same live Supabase-backed state
+- Auth explicitly deferred, not silently skipped — see note above
