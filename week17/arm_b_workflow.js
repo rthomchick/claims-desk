@@ -1,9 +1,9 @@
 export const meta = {
-  name: 'arm-b-adversarial-substantiation',
-  description: 'Adversarial substantiation — 3 Haiku evidence agents, Opus/Haiku adversarial loop (max 3 rounds), Opus synthesis',
+  name: 'arm-b-adversarial-substantiation-v2',
+  description: 'Arm B re-run: 3/3 evidence agents required; retry-once-then-abort guard',
   phases: [
     { title: 'Claim Fetch', detail: 'Fetch claim da4bdf0a live from Claims Desk MCP via subagent' },
-    { title: 'Evidence Gathering', detail: '3 parallel Haiku agents: source existence, recency, competitive landscape' },
+    { title: 'Evidence Gathering', detail: '3 parallel Haiku agents: source_existence, recency_and_currency, competitive_landscape' },
     { title: 'Adversarial Loop', detail: 'Opus adversary + Haiku defender, max 3 rounds, structural convergence guard' },
     { title: 'Synthesis', detail: 'Opus final report: verdict, evidence, attack inventory, instrumentation' },
   ],
@@ -145,10 +145,10 @@ log(`Type: ${claimData.claim_type} | Status: ${claimData.current_status}`)
 log(`Evidence standard: ${claimData.evidence_standard}`)
 log(`Claim fetch: ~${fetchTokens} output tokens`)
 
-// ── Phase 2: Evidence Gathering ────────────────────────────────────────────
+// ── Phase 2: Evidence Gathering (initial attempt + retry guard) ─────────────
 
 phase('Evidence Gathering')
-log('Launching 3 parallel Haiku evidence agents...')
+log('Launching 3 parallel Haiku evidence agents (initial attempt)...')
 
 const ANGLES = [
   {
@@ -165,10 +165,13 @@ const ANGLES = [
   },
 ]
 
-const p2Start = budget.spent()
-const evidenceResults = await parallel(
-  ANGLES.map(a => () => agent(
-    `You are an evidence researcher for a marketing claim substantiation review.
+const evidencePrompt = (a, isRetry) => {
+  const retryPreamble = isRetry
+    ? `MANDATORY: You are on a RETRY because a prior agent completed without calling the StructuredOutput tool. You MUST call StructuredOutput before finishing — do not end your response without it. Return whatever you found, even if your evidence list is limited. Calling StructuredOutput with partial results is required; not calling it is not acceptable.
+
+`
+    : ''
+  return `${retryPreamble}You are an evidence researcher for a marketing claim substantiation review.
 
 CLAIM: "${claimData.claim_text}"
 CLAIM TYPE: ${claimData.claim_type}
@@ -188,27 +191,82 @@ INSTRUCTIONS:
 4. In limitations, list significant gaps (e.g., "no authoritative ranking found", "most recent data is 3 years old")
 5. Count ALL tool calls you made (ToolSearch + WebSearch + WebFetch calls) and report in tool_calls_made
 
-Return your structured findings.`,
+Return your structured findings.`
+}
+
+const p2InitStart = budget.spent()
+const initialResults = await parallel(
+  ANGLES.map(a => () => agent(
+    evidencePrompt(a, false),
     { label: `evidence-${a.angle}`, phase: 'Evidence Gathering', model: 'haiku', schema: EVIDENCE_SCHEMA }
   ))
 )
-const p2Tokens = budget.spent() - p2Start
+const p2InitTokens = budget.spent() - p2InitStart
 
-const validEvidence = evidenceResults.filter(Boolean)
-log(`${validEvidence.length}/3 evidence agents succeeded`)
-log(`Phase 2 evidence total: ~${p2Tokens} output tokens`)
+const failedIndices = initialResults.reduce((acc, r, i) => r === null ? [...acc, i] : acc, [])
+log(`Initial evidence: ${3 - failedIndices.length}/3 succeeded`)
 
-const evidenceSummary = validEvidence.length > 0
-  ? validEvidence.map(e =>
-      `[${e.angle}] ${e.evidence_items.length} item(s): ${e.evidence_items.map(i => `"${i.finding}" (${i.strength}, ${i.source}${i.date_published ? ', ' + i.date_published : ''})`).join('; ')}\nLimitations: ${(e.limitations || []).join('; ') || 'none noted'}`
-    ).join('\n\n')
-  : 'No evidence gathered — all evidence agents failed or returned null.'
+// Retry any failed agents sequentially (one at a time for per-agent token tracking)
+const retryResults = initialResults.slice()  // start with initial results
+const retryInstr = []
+let p2RetryTokens = 0
+
+if (failedIndices.length > 0) {
+  phase('Evidence Retry')
+  log(`Retrying ${failedIndices.length} failed agent(s): ${failedIndices.map(i => ANGLES[i].angle).join(', ')}`)
+
+  for (const idx of failedIndices) {
+    const a = ANGLES[idx]
+    log(`Retry: evidence-${a.angle}...`)
+    const rStart = budget.spent()
+    const retryResult = await agent(
+      evidencePrompt(a, true),
+      { label: `retry-evidence-${a.angle}`, phase: 'Evidence Retry', model: 'haiku', schema: EVIDENCE_SCHEMA }
+    )
+    const rTokens = budget.spent() - rStart
+    retryResults[idx] = retryResult
+    retryInstr.push({
+      angle: a.angle,
+      output_tokens: rTokens,
+      succeeded: retryResult !== null,
+    })
+    p2RetryTokens += rTokens
+    log(`Retry evidence-${a.angle}: ${retryResult !== null ? 'succeeded' : 'FAILED again'}`)
+  }
+}
+
+// Abort check: need all 3
+const stillFailed = ANGLES.filter((_, i) => retryResults[i] === null)
+if (stillFailed.length > 0) {
+  const failedAngles = stillFailed.map(a => a.angle).join(', ')
+  log(`ABORT: ${stillFailed.length} evidence agent(s) failed twice: ${failedAngles}`)
+  return {
+    aborted: true,
+    reason: `Evidence agents failed initial attempt AND retry for: ${failedAngles}. Run aborted per spec — requires clean 3/3.`,
+    failed_angles: stillFailed.map(a => a.angle),
+    instrumentation: {
+      phase1_claim_fetch: { output_tokens: fetchTokens, tool_calls: 2 },
+      phase2_initial_output_tokens: p2InitTokens,
+      phase2_retry_output_tokens: p2RetryTokens,
+      retry_detail: retryInstr,
+    },
+  }
+}
+
+const validEvidence = retryResults  // all 3 non-null
+const wasRetry = ANGLES.map((_, i) => initialResults[i] === null)
+const p2Tokens = p2InitTokens + p2RetryTokens
+log(`3/3 evidence agents succeeded. Phase 2 total: ~${p2Tokens} output tokens`)
+
+const evidenceSummary = validEvidence.map(e =>
+  `[${e.angle}] ${e.evidence_items.length} item(s): ${e.evidence_items.map(i => `"${i.finding}" (${i.strength}, ${i.source}${i.date_published ? ', ' + i.date_published : ''})`).join('; ')}\nLimitations: ${(e.limitations || []).join('; ') || 'none noted'}`
+).join('\n\n')
 
 // ── Phase 3: Adversarial Loop ──────────────────────────────────────────────
 
 phase('Adversarial Loop')
 
-let prevRoundVerdict = null   // null = no prior round, so convergence cannot trigger in round 1
+let prevRoundVerdict = null
 let currentVerdict = null
 let roundsRun = 0
 let stopReason = 'hit_cap'
@@ -225,7 +283,6 @@ for (let round = 1; round <= 3; round++) {
     ? priorAttacks.map((a, i) => `${i + 1}. ${a}`).join('\n')
     : 'None — this is round 1; all critical attacks you raise are new.'
 
-  // Adversary: Opus attacks the evidence and current verdict
   const advS = budget.spent()
   const adversary = await agent(
     `You are an adversarial reviewer. Your job is to find weaknesses that would DEFEAT this marketing claim. Be rigorous and skeptical — your role is to attack, not to defend.
@@ -255,7 +312,6 @@ CRITICAL INSTRUCTIONS:
   )
   const advTokens = budget.spent() - advS
 
-  // Defender: Haiku rebuts the adversary's attacks
   const defS = budget.spent()
   const defender = await agent(
     `You are defending a marketing claim against adversarial attacks. Use the gathered evidence to rebut each attack as strongly as the evidence allows.
@@ -285,20 +341,25 @@ In tool_calls_made: report 0 — no web search needed, reason over gathered evid
   const defTokens = budget.spent() - defS
 
   const newVerdict = defender.current_verdict
-  // Convergence guard (structural): compare BEFORE updating prevRoundVerdict
   const verdictUnchanged = prevRoundVerdict !== null && newVerdict === prevRoundVerdict
   const noNewCriticalAttacks = adversary.new_critical_attacks.length === 0
 
-  // Update state
   roundResults.push({ round, adversary, defender })
-  roundInstr.push({ round, adversary_tokens: advTokens, defender_tokens: defTokens, adversary_tool_calls: adversary.tool_calls_made || 0, defender_tool_calls: defender.tool_calls_made || 0 })
+  roundInstr.push({
+    round,
+    adversary_tokens: advTokens,
+    defender_tokens: defTokens,
+    adversary_tool_calls: adversary.tool_calls_made || 0,
+    defender_tool_calls: defender.tool_calls_made || 0,
+    new_critical_attacks: adversary.new_critical_attacks.length,
+    verdict: newVerdict,
+  })
   prevRoundVerdict = newVerdict
   currentVerdict = newVerdict
   roundsRun = round
 
   log(`Round ${round}: verdict=${newVerdict}, new_critical_attacks=${adversary.new_critical_attacks.length}, verdict_unchanged=${verdictUnchanged}`)
 
-  // Break when BOTH conditions hold (structural convergence)
   if (verdictUnchanged && noNewCriticalAttacks) {
     stopReason = 'converged'
     log(`Converged at round ${round}: verdict stable (${currentVerdict}), no new critical attacks`)
@@ -383,20 +444,26 @@ return {
       tool_calls: 2,
     },
     phase2_evidence_gathering: {
-      note: 'Ran in parallel — per-agent token deltas unavailable from script layer (concurrent); see workflow progress UI for per-agent timing',
+      initial_attempt: {
+        phase_output_tokens_total: p2InitTokens,
+        note: 'Ran in parallel — per-agent token deltas unavailable from script layer; see workflow UI',
+      },
+      retries: retryInstr,
+      had_retries: failedIndices.length > 0,
       phase_output_tokens_total: p2Tokens,
       tool_calls_total: p2EvidenceToolCalls,
-      per_agent_tool_calls: validEvidence.map(e => ({
+      per_agent: validEvidence.map((e, i) => ({
         agent: `evidence-${e.angle}`,
         model: 'haiku',
         tool_calls: e.tool_calls_made || 0,
+        was_retry: wasRetry[i],
       })),
     },
     phase3_adversarial_loop: {
       rounds: roundInstr.map(r => ({
         round: r.round,
-        adversary: { model: 'opus', output_tokens: r.adversary_tokens, tool_calls: r.adversary_tool_calls },
-        defender: { model: 'haiku', output_tokens: r.defender_tokens, tool_calls: r.defender_tool_calls },
+        adversary: { model: 'opus', output_tokens: r.adversary_tokens, tool_calls: r.adversary_tool_calls, new_critical_attacks: r.new_critical_attacks },
+        defender: { model: 'haiku', output_tokens: r.defender_tokens, tool_calls: r.defender_tool_calls, verdict: r.verdict },
       })),
       total_output_tokens: p3TotalTokens,
       total_tool_calls: p3TotalToolCalls,
@@ -410,8 +477,8 @@ return {
     totals: {
       subagent_output_tokens: subagentOutputTokensTotal,
       orchestration_model_tokens: 0,
-      wall_time_note: 'Date.now() unavailable in workflow scripts — per-agent and total wall-time visible in workflow progress UI only',
-      token_counting_note: 'budget.spent() tracks output tokens only; input tokens visible in workflow progress UI',
+      wall_time_note: 'Date.now() unavailable in workflow scripts — total wall-time in workflow progress UI',
+      token_counting_note: 'budget.spent() tracks output tokens; full-cost total (input+output+cache) from runtime usage field',
     },
   },
 }
