@@ -42,6 +42,17 @@ def append_claim(
                     (claim_id, evidence_url, evidence_date, sample_size, baseline, expiry_date),
                 )
         conn.commit()
+        # Post-write verification: confirm the row persisted.
+        # Motivated by Week 17 Day 3 silent-failure (returned claim_id for a row
+        # that never appeared in Supabase after commit). The RETURNING value from
+        # the INSERT is captured before commit; if the commit silently fails or the
+        # pooler discards the transaction, this check catches it.
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM claims WHERE claim_id = %s", (claim_id,))
+            if cur.fetchone() is None:
+                raise RuntimeError(
+                    f"append_claim: INSERT reported claim_id {claim_id} but row not found after commit"
+                )
     finally:
         conn.close()
 

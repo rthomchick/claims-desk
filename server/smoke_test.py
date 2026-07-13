@@ -1,7 +1,7 @@
 """
-In-process smoke test: confirms the server starts and all four tools are
+In-process smoke test: confirms the server starts and all five tools are
 registered and callable via the MCP SDK's in-process Client test pattern
-(no subprocess, no live DB required for this check — see DoD item 3).
+(no subprocess, no live DB required for this check).
 """
 
 from __future__ import annotations
@@ -18,10 +18,10 @@ async def main() -> None:
         tools = await client.list_tools()
         names = sorted(t.name for t in tools.tools)
         expected = sorted(
-            ["append_claim", "get_claim_status", "check_substantiation", "classify_claim_risk"]
+            ["append_claim", "get_claim_status", "check_substantiation", "classify_claim_risk", "delete_claim"]
         )
         assert names == expected, f"expected {expected}, got {names}"
-        print(f"all four tools registered: {names}")
+        print(f"all five tools registered: {names}")
 
 
 if __name__ == "__main__":

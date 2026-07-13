@@ -1,6 +1,6 @@
 """
-Claims Desk MCP server. Four tools per ADR-016 Decision 1:
-append_claim, get_claim_status, check_substantiation, classify_claim_risk.
+Claims Desk MCP server. Five tools per ADR-016 Decision 1 + Addendum (2026-07-13):
+append_claim, get_claim_status, check_substantiation, classify_claim_risk, delete_claim.
 
 Transport is selected at runtime via the MCP_TRANSPORT env var:
 - "stdio" (default) — local dev / Claude Code local connector
@@ -26,6 +26,7 @@ from server.tools.append_claim import append_claim as _append_claim
 from server.tools.get_claim_status import get_claim_status as _get_claim_status
 from server.tools.check_substantiation import check_substantiation as _check_substantiation
 from server.tools.classify_claim_risk import classify_claim_risk as _classify_claim_risk
+from server.tools.delete_claim import delete_claim as _delete_claim
 
 mcp = FastMCP(
     "claims-desk",
@@ -80,6 +81,12 @@ def check_substantiation(claim_id: str) -> dict:
 def classify_claim_risk(claim_id: str) -> dict:
     """Classify a claim's risk (low/medium/high/prohibited) with contributing factors."""
     return _classify_claim_risk(claim_id)
+
+
+@mcp.tool()
+def delete_claim(claim_id: str) -> dict:
+    """Delete a claim and its linked evidence rows. Returns {deleted: true, claim_id} on success."""
+    return _delete_claim(claim_id)
 
 
 if __name__ == "__main__":
