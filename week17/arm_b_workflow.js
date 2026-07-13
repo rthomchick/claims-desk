@@ -360,9 +360,14 @@ In tool_calls_made: report 0 — no web search needed, reason over gathered evid
 
   log(`Round ${round}: verdict=${newVerdict}, new_critical_attacks=${adversary.new_critical_attacks.length}, verdict_unchanged=${verdictUnchanged}`)
 
-  if (verdictUnchanged && noNewCriticalAttacks) {
+  // Convergence gates on adversary exhaustion alone. The loop's job is to exhaust
+  // the attack surface, not to stabilize a mid-loop verdict label. Verdict is
+  // rendered once at synthesis, which already overrides defender verdicts.
+  // Defender verdict oscillation is downstream noise and must not control loop
+  // termination.
+  if (noNewCriticalAttacks) {
     stopReason = 'converged'
-    log(`Converged at round ${round}: verdict stable (${currentVerdict}), no new critical attacks`)
+    log(`Converged at round ${round}: no new critical attacks — adversary exhausted (defender verdict=${newVerdict}, verdict_unchanged=${verdictUnchanged})`)
     break
   }
 }
