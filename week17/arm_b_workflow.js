@@ -1,6 +1,6 @@
 export const meta = {
   name: 'arm-b-adversarial-substantiation-v2',
-  description: 'Arm B re-run: 3/3 evidence agents required; retry-once-then-abort guard',
+  description: 'Arm B: plan-in-script arm of Day 2 cost comparison (fixed convergence guard, 3/3 evidence agents)',
   phases: [
     { title: 'Claim Fetch', detail: 'Fetch claim da4bdf0a live from Claims Desk MCP via subagent' },
     { title: 'Evidence Gathering', detail: '3 parallel Haiku agents: source_existence, recency_and_currency, competitive_landscape' },
