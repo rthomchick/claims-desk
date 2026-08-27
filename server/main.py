@@ -1,6 +1,7 @@
 """
-Claims Desk MCP server. Five tools per ADR-016 Decision 1 + Addendum (2026-07-13):
-append_claim, get_claim_status, check_substantiation, classify_claim_risk, delete_claim.
+Claims Desk MCP server. Six tools per ADR-016 Decision 1 + Addendum (2026-07-13)
+plus Week 18 Day 1 (d3): append_claim, get_claim_status, check_substantiation,
+classify_claim_risk, delete_claim, list_claims.
 
 Transport is selected at runtime via the MCP_TRANSPORT env var:
 - "stdio" (default) — local dev / Claude Code local connector
@@ -27,6 +28,7 @@ from server.tools.get_claim_status import get_claim_status as _get_claim_status
 from server.tools.check_substantiation import check_substantiation as _check_substantiation
 from server.tools.classify_claim_risk import classify_claim_risk as _classify_claim_risk
 from server.tools.delete_claim import delete_claim as _delete_claim
+from server.tools.list_claims import list_claims as _list_claims
 
 mcp = FastMCP(
     "claims-desk",
@@ -85,8 +87,22 @@ def classify_claim_risk(claim_id: str) -> dict:
 
 @mcp.tool()
 def delete_claim(claim_id: str) -> dict:
-    """Delete a claim and its linked evidence rows. Returns {deleted: true, claim_id} on success."""
+    """Soft-delete a claim (record_status -> 'deleted'). Returns {deleted: true, claim_id} on success."""
     return _delete_claim(claim_id)
+
+
+@mcp.tool()
+def list_claims(
+    claim_type: str | None = None,
+    status: str | None = None,
+    product_key: str | None = None,
+) -> list[dict]:
+    """
+    Enumerate claims by type/status/product. status is 'active' (default),
+    'deleted', or 'all'. Returns slug-first summaries — claim_slug, claim_id,
+    product_key, claim_type, status, risk_class — with no evidence payload.
+    """
+    return _list_claims(claim_type=claim_type, status=status, product_key=product_key)
 
 
 if __name__ == "__main__":

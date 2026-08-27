@@ -30,15 +30,19 @@ def test_delete_claim_success():
     result = delete_claim(claim_id)
     assert result == {"deleted": True, "claim_id": claim_id}
 
+    # Soft delete: the row survives with record_status flipped, not removed.
     after = get_claim_status(claim_id)
-    assert "error" in after
+    assert "claim" in after, f"claim unexpectedly gone after soft delete: {after}"
+    assert after["claim"]["record_status"] == "deleted"
 
 
-def test_delete_claim_cascades_evidence():
+def test_delete_claim_preserves_evidence():
+    """Soft delete (Week 18 d1): the claims row is never removed, so
+    evidence_links' ON DELETE CASCADE never fires and its rows survive."""
     claim_id = append_claim(
         product_key="kalder_resolve",
         claim_type="performance",
-        claim_text="throwaway claim with evidence for cascade test",
+        claim_text="throwaway claim with evidence for soft-delete test",
         evidence_url="https://example.com/study.pdf",
         evidence_date="2025-01-01",
         sample_size=100,
@@ -61,4 +65,4 @@ def test_delete_claim_cascades_evidence():
     finally:
         conn.close()
 
-    assert count == 0
+    assert count == 1

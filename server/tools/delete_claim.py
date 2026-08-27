@@ -1,12 +1,11 @@
-"""delete_claim — delete a claim and its linked evidence from the registry.
+"""delete_claim — soft-delete a claim in the registry.
 
-Deletes the claim row in a single transaction; evidence_links rows cascade
-automatically via the FK constraint (evidence_links_claim_id_fkey, ON DELETE CASCADE).
-
-Note: review_rulings also has ON DELETE CASCADE per the existing schema
-(review_rulings_claim_id_fkey). This means rulings ARE deleted alongside the claim,
-contrary to ADR-016 Decision 1 Addendum intent. Flagged for Week 18: evaluate
-making review_rulings.claim_id nullable + SET NULL to preserve the audit trail.
+Flips claims.record_status to 'deleted' rather than removing the row.
+review_rulings.claim_id has no ON DELETE CASCADE (Week 18 d1), so rulings
+attached to a claim survive a soft delete, preserving the audit trail.
+evidence_links keeps its hard-delete cascade unchanged (Week 17 ADR-016
+addendum) — it is unaffected by this tool since the claims row itself is
+never removed.
 """
 
 from __future__ import annotations
@@ -19,15 +18,15 @@ def delete_claim(claim_id: str) -> dict:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM claims WHERE claim_id = %s",
+                "UPDATE claims SET record_status = 'deleted' WHERE claim_id = %s",
                 (claim_id,),
             )
-            deleted_count = cur.rowcount
+            updated_count = cur.rowcount
         conn.commit()
     finally:
         conn.close()
 
-    if deleted_count == 0:
+    if updated_count == 0:
         return {"error": f"no claim found with claim_id {claim_id}"}
 
     return {"deleted": True, "claim_id": claim_id}

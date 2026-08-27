@@ -4,6 +4,8 @@ create table claims (
     claim_type text not null check (claim_type in ('performance', 'comparative', 'compliance', 'superlative')),
     claim_text text not null,
     status text not null default 'unverified' check (status in ('unverified', 'substantiated', 'insufficient', 'expired')),
+    record_status text not null default 'active' check (record_status in ('active', 'deleted')),
+    claim_slug text not null unique,     -- stable, human-readable address: {product_key}-{claim_type}-{NN}, never reused
     risk_class text check (risk_class in ('low', 'medium', 'high', 'prohibited')),
     risk_factors jsonb,                  -- structured factors driving the risk_class, not just the label
     created_at timestamptz not null default now(),
@@ -23,9 +25,12 @@ create table evidence_links (
 
 create table review_rulings (
     ruling_id uuid primary key default gen_random_uuid(),
-    claim_id uuid not null references claims(claim_id) on delete cascade,
+    claim_id uuid not null references claims(claim_id),  -- no cascade: rulings survive a soft-deleted claim (d1)
     ruling text not null check (ruling in ('approved', 'rejected', 'escalated')),
     rationale text,
     reviewed_by text,                    -- 'system' for MCP-tool-driven, agent identifier for Week 18 review agent
     created_at timestamptz not null default now()
 );
+
+create view active_claims as
+select * from claims where record_status = 'active';

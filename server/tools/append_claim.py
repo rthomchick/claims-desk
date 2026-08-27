@@ -18,13 +18,25 @@ def append_claim(
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            # Slugs are never reused (d2 x d1): count against ALL claims ever
+            # inserted for this product_key+claim_type pair, active or deleted.
             cur.execute(
                 """
-                insert into claims (product_key, claim_type, claim_text)
-                values (%s, %s, %s)
+                select count(*) from claims
+                where product_key = %s and claim_type = %s
+                """,
+                (product_key, claim_type),
+            )
+            next_n = cur.fetchone()[0] + 1
+            claim_slug = f"{product_key}-{claim_type}-{next_n:02d}"
+
+            cur.execute(
+                """
+                insert into claims (product_key, claim_type, claim_text, claim_slug)
+                values (%s, %s, %s, %s)
                 returning claim_id
                 """,
-                (product_key, claim_type, claim_text),
+                (product_key, claim_type, claim_text, claim_slug),
             )
             claim_id = cur.fetchone()[0]
 
@@ -56,4 +68,4 @@ def append_claim(
     finally:
         conn.close()
 
-    return {"claim_id": str(claim_id)}
+    return {"claim_id": str(claim_id), "claim_slug": claim_slug}

@@ -9,7 +9,8 @@ def get_claim_status(claim_id: str) -> dict:
     claim = fetchone_dict(
         """
         select claim_id, product_key, claim_type, claim_text, status,
-               risk_class, risk_factors, created_at, updated_at
+               record_status, claim_slug, risk_class, risk_factors,
+               created_at, updated_at
         from claims
         where claim_id = %s
         """,
