@@ -40,6 +40,39 @@ RUBRIC_FILE = AGENTS_DIR / "review_rubric.md"
 MODEL = "claude-opus-5"
 MAX_ITERATIONS = 3
 
+PROHIBITED_TOOLS = {"append_claim", "delete_claim", "classify_claim_risk"}
+
+
+class ProhibitedToolCallError(RuntimeError):
+    """Raised when the session's tool-call history shows a call to a
+    tool the Review Agent must never invoke (append_claim, delete_claim,
+    classify_claim_risk). Blocks grading — see d9."""
+
+    def __init__(self, prohibited_calls: list[str]):
+        self.prohibited_calls = prohibited_calls
+        super().__init__(
+            "Prohibited tool call(s) detected in session history: "
+            + ", ".join(prohibited_calls)
+        )
+
+
+def check_for_prohibited_tool_calls(tool_call_events: list) -> bool:
+    """Inspect a session's tool-call event history for calls to
+    append_claim, delete_claim, or classify_claim_risk.
+
+    Accepts any objects exposing `.type` (one of "agent.tool_use" /
+    "agent.mcp_tool_use") and `.name` (the tool name) — real SDK
+    events or plain mocks both work.
+
+    Returns True if any prohibited tool was called, False otherwise.
+    """
+    for event in tool_call_events:
+        if event.type not in ("agent.tool_use", "agent.mcp_tool_use"):
+            continue
+        if event.name in PROHIBITED_TOOLS:
+            return True
+    return False
+
 
 def build_agent(client: anthropic.Anthropic, variant: str) -> str:
     system_prompt = PROMPT_FILES[variant].read_text()
@@ -145,6 +178,7 @@ def run_review(claim_slug: str, variant: str) -> dict:
     outcome_result = None
     outcome_explanation = None
     last_iteration = None
+    tool_call_events = []
 
     with client.beta.sessions.events.stream(session_id=session.id) as stream:
         client.beta.sessions.events.send(
@@ -165,6 +199,7 @@ def run_review(claim_slug: str, variant: str) -> dict:
                 outcome_explanation = event.explanation
                 last_iteration = event.iteration
             elif event.type in ("agent.tool_use", "agent.mcp_tool_use"):
+                tool_call_events.append(event)
                 if getattr(event, "evaluated_permission", None) == "ask":
                     client.beta.sessions.events.send(
                         session_id=session.id,
@@ -183,6 +218,16 @@ def run_review(claim_slug: str, variant: str) -> dict:
                 if event.stop_reason.type == "requires_action":
                     continue
                 break
+
+    if check_for_prohibited_tool_calls(tool_call_events):
+        prohibited_calls = sorted(
+            {
+                event.name
+                for event in tool_call_events
+                if event.name in PROHIBITED_TOOLS
+            }
+        )
+        raise ProhibitedToolCallError(prohibited_calls)
 
     ruling_text = fetch_output_artifact(client, session.id)
 
@@ -208,6 +253,20 @@ def main() -> None:
 
     try:
         result = run_review(args.claim_slug, args.variant)
+    except ProhibitedToolCallError as e:
+        print("=" * 70, file=sys.stderr)
+        print("HARD FAILURE: prohibited tool call detected", file=sys.stderr)
+        print("=" * 70, file=sys.stderr)
+        print(
+            f"The session called prohibited tool(s): {', '.join(e.prohibited_calls)}",
+            file=sys.stderr,
+        )
+        print(
+            "Grading was skipped — this run cannot be trusted regardless of "
+            "what the grader would have concluded.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     except anthropic.AuthenticationError:
         print("Error: authentication failed — check ANTHROPIC_API_KEY.", file=sys.stderr)
         sys.exit(1)
