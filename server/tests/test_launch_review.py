@@ -12,12 +12,26 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import anthropic
+
 from server.agents.launch_review import (
     build_session,
     check_for_prohibited_tool_calls,
     get_memory_store_id,
     maybe_write_ruling_to_memory,
+    print_ruling_and_grading,
+    write_ruling_to_memory,
 )
+
+
+def _conflict_error():
+    response = MagicMock()
+    response.status_code = 409
+    return anthropic.ConflictError(
+        message="memory_path_conflict_error",
+        response=response,
+        body={"error": {"type": "memory_path_conflict_error"}},
+    )
 
 
 def _tool_call(name: str, event_type: str = "agent.mcp_tool_use"):
@@ -193,3 +207,59 @@ def test_build_session_memory_off_never_touches_memory_store_id(monkeypatch):
     client.beta.memory_stores.create.assert_not_called()
     _, kwargs = client.beta.sessions.create.call_args
     assert kwargs["resources"] is None
+
+
+# --- d14: reorder (ruling prints before Memory write) + idempotent write ---
+
+
+def test_path_does_not_exist_create_is_called():
+    client = MagicMock()
+
+    reason = write_ruling_to_memory(
+        client, "memstore_abc123", "acme-widget", "performance", "ruling text"
+    )
+
+    assert reason == "wrote"
+    client.beta.memory_stores.memories.create.assert_called_once_with(
+        "memstore_abc123",
+        content="ruling text",
+        path="/acme-widget-performance.md",
+    )
+    client.beta.memory_stores.memories.update.assert_not_called()
+
+
+def test_path_already_exists_update_is_called_not_create():
+    client = MagicMock()
+    client.beta.memory_stores.memories.create.side_effect = _conflict_error()
+    client.beta.memory_stores.memories.list.return_value = [
+        SimpleNamespace(id="mem_existing123", path="/acme-widget-performance.md"),
+        SimpleNamespace(id="mem_other456", path="/other-product-comparative.md"),
+    ]
+
+    reason = write_ruling_to_memory(
+        client, "memstore_abc123", "acme-widget", "performance", "new ruling text"
+    )
+
+    assert reason == "updated existing"
+    client.beta.memory_stores.memories.create.assert_called_once()
+    client.beta.memory_stores.memories.update.assert_called_once_with(
+        "mem_existing123",
+        memory_store_id="memstore_abc123",
+        content="new ruling text",
+    )
+
+
+def test_memory_write_raises_ruling_already_printed(capsys):
+    client = MagicMock()
+    client.beta.memory_stores.memories.create.side_effect = RuntimeError("boom")
+
+    print_ruling_and_grading("the ruling text", "satisfied", None, 0)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        write_ruling_to_memory(
+            client, "memstore_abc123", "acme-widget", "performance", "the ruling text"
+        )
+
+    out = capsys.readouterr().out
+    assert "the ruling text" in out
+    assert "RULING ARTIFACT" in out

@@ -211,19 +211,49 @@ def write_ruling_to_memory(
     product_key: str,
     claim_type: str,
     ruling_text: str,
-) -> None:
+) -> str:
     """Write a satisfied ruling to Memory, scoped by product_key + claim_type.
 
     Called by the launcher, never the agent — the agent's memory_store
     resource is read-only (d12). Path convention matches the existing
     stores observed in Day 7's inspection: /{product_key}-{claim_type}.md
+
+    OVERWRITE semantics: one current ruling per {product_key}-{claim_type}
+    path. `create` makes the first write; if the path already exists,
+    `create` 409s (memory_path_conflict_error) and we resolve the existing
+    memory's id via `list` and `update` it instead (d14 — the update API
+    is keyed by memory_id, not path, so there is no direct upsert-by-path).
+
+    Returns "wrote" or "updated existing" so the caller can print which
+    case occurred — that distinction is what made f14 findable (d12).
     """
     path = f"/{product_key}-{claim_type}.md"
-    client.beta.memory_stores.memories.create(
-        memory_store_id,
-        content=ruling_text,
-        path=path,
-    )
+    try:
+        client.beta.memory_stores.memories.create(
+            memory_store_id,
+            content=ruling_text,
+            path=path,
+        )
+        return "wrote"
+    except anthropic.ConflictError:
+        existing = next(
+            (
+                item
+                for item in client.beta.memory_stores.memories.list(
+                    memory_store_id, path_prefix="/"
+                )
+                if item.path == path
+            ),
+            None,
+        )
+        if existing is None:
+            raise
+        client.beta.memory_stores.memories.update(
+            existing.id,
+            memory_store_id=memory_store_id,
+            content=ruling_text,
+        )
+        return "updated existing"
 
 
 def maybe_write_ruling_to_memory(
@@ -248,7 +278,7 @@ def maybe_write_ruling_to_memory(
         return False
 
     claim = get_claim_product_and_type(claim_slug)
-    write_ruling_to_memory(
+    reason = write_ruling_to_memory(
         client,
         memory_store_id,
         claim["product_key"],
@@ -256,10 +286,34 @@ def maybe_write_ruling_to_memory(
         ruling_text,
     )
     print(
-        f"Memory write performed: grading result is 'satisfied' — wrote "
+        f"Memory write performed: grading result is 'satisfied' — {reason} "
         f"/{claim['product_key']}-{claim['claim_type']}.md."
     )
     return True
+
+
+def print_ruling_and_grading(
+    ruling_text: str,
+    outcome_result: str | None,
+    outcome_explanation: str | None,
+    last_iteration: int | None,
+) -> None:
+    """Print the ruling artifact and grading result. Must run before any
+    Memory write is attempted (d14) — the deliverable has to reach stdout
+    even if the subsequent persistence step fails."""
+    print("=" * 70)
+    print("RULING ARTIFACT")
+    print("=" * 70)
+    print(ruling_text)
+    print()
+    print("=" * 70)
+    print("GRADING RESULT")
+    print("=" * 70)
+    print(f"Result: {outcome_result}")
+    iteration_count = (last_iteration + 1) if last_iteration is not None else None
+    print(f"Iterations: {iteration_count}")
+    if outcome_explanation:
+        print(f"Per-criterion feedback:\n{outcome_explanation}")
 
 
 def run_review(claim_slug: str, variant: str) -> dict:
@@ -328,6 +382,10 @@ def run_review(claim_slug: str, variant: str) -> dict:
     ruling_text = fetch_output_artifact(client, session.id)
     ruling_text = ruling_text.strip()
 
+    print_ruling_and_grading(
+        ruling_text, outcome_result, outcome_explanation, last_iteration
+    )
+
     memory_write_performed = maybe_write_ruling_to_memory(
         client, variant, memory_store_id, outcome_result, claim_slug, ruling_text
     )
@@ -354,7 +412,7 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        result = run_review(args.claim_slug, args.variant)
+        run_review(args.claim_slug, args.variant)
     except ProhibitedToolCallError as e:
         print("=" * 70, file=sys.stderr)
         print("HARD FAILURE: prohibited tool call detected", file=sys.stderr)
@@ -381,19 +439,6 @@ def main() -> None:
     except Exception as e:
         print(f"Error: session failed unexpectedly: {e}", file=sys.stderr)
         sys.exit(1)
-
-    print("=" * 70)
-    print("RULING ARTIFACT")
-    print("=" * 70)
-    print(result["ruling"])
-    print()
-    print("=" * 70)
-    print("GRADING RESULT")
-    print("=" * 70)
-    print(f"Result: {result['outcome_result']}")
-    print(f"Iterations: {result['iteration_count']}")
-    if result["outcome_explanation"]:
-        print(f"Per-criterion feedback:\n{result['outcome_explanation']}")
 
 
 if __name__ == "__main__":
