@@ -10,8 +10,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from server.agents.launch_review import (
+    build_session,
     check_for_prohibited_tool_calls,
+    get_memory_store_id,
     maybe_write_ruling_to_memory,
 )
 
@@ -119,3 +123,73 @@ def test_prohibited_tool_call_pre_gate_skips_write(mock_get_claim, mock_write):
     assert performed is False
     mock_get_claim.assert_not_called()
     mock_write.assert_not_called()
+
+
+# --- d13: persistent Memory store referenced by ID, no per-invocation create ---
+
+
+def test_missing_env_var_raises_and_does_not_create_store(monkeypatch):
+    monkeypatch.delenv("CLAIMS_REVIEW_MEMORY_STORE_ID", raising=False)
+
+    with pytest.raises(RuntimeError, match="CLAIMS_REVIEW_MEMORY_STORE_ID"):
+        get_memory_store_id()
+
+
+def test_empty_string_env_var_raises_and_does_not_create_store(monkeypatch):
+    monkeypatch.setenv("CLAIMS_REVIEW_MEMORY_STORE_ID", "")
+
+    with pytest.raises(RuntimeError, match="CLAIMS_REVIEW_MEMORY_STORE_ID"):
+        get_memory_store_id()
+
+
+def test_valid_env_var_returns_id_without_create(monkeypatch):
+    monkeypatch.setenv("CLAIMS_REVIEW_MEMORY_STORE_ID", "memstore_01PCBbgQ6HkoQr3ogWPsttz8")
+
+    assert get_memory_store_id() == "memstore_01PCBbgQ6HkoQr3ogWPsttz8"
+
+
+def test_build_session_memory_on_references_env_store_no_create(monkeypatch):
+    monkeypatch.setenv("CLAIMS_REVIEW_MEMORY_STORE_ID", "memstore_01PCBbgQ6HkoQr3ogWPsttz8")
+    client = MagicMock()
+    client.beta.environments.create.return_value = SimpleNamespace(id="env_123")
+    client.beta.sessions.create.return_value = SimpleNamespace(id="sess_123")
+
+    session, memory_store_id = build_session(client, "agent_123", 1, "memory_on")
+
+    assert memory_store_id == "memstore_01PCBbgQ6HkoQr3ogWPsttz8"
+    client.beta.memory_stores.create.assert_not_called()
+    _, kwargs = client.beta.sessions.create.call_args
+    assert kwargs["resources"] == [
+        {
+            "type": "memory_store",
+            "memory_store_id": "memstore_01PCBbgQ6HkoQr3ogWPsttz8",
+            "access": "read_only",
+            "instructions": "Check for a prior ruling on this product + claim_type before ruling.",
+        }
+    ]
+
+
+def test_build_session_memory_on_missing_env_raises_before_session_create(monkeypatch):
+    monkeypatch.delenv("CLAIMS_REVIEW_MEMORY_STORE_ID", raising=False)
+    client = MagicMock()
+    client.beta.environments.create.return_value = SimpleNamespace(id="env_123")
+
+    with pytest.raises(RuntimeError, match="CLAIMS_REVIEW_MEMORY_STORE_ID"):
+        build_session(client, "agent_123", 1, "memory_on")
+
+    client.beta.memory_stores.create.assert_not_called()
+    client.beta.sessions.create.assert_not_called()
+
+
+def test_build_session_memory_off_never_touches_memory_store_id(monkeypatch):
+    monkeypatch.delenv("CLAIMS_REVIEW_MEMORY_STORE_ID", raising=False)
+    client = MagicMock()
+    client.beta.environments.create.return_value = SimpleNamespace(id="env_123")
+    client.beta.sessions.create.return_value = SimpleNamespace(id="sess_123")
+
+    session, memory_store_id = build_session(client, "agent_123", 1, "memory_off")
+
+    assert memory_store_id is None
+    client.beta.memory_stores.create.assert_not_called()
+    _, kwargs = client.beta.sessions.create.call_args
+    assert kwargs["resources"] is None

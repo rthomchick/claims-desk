@@ -17,6 +17,7 @@ per-criterion feedback.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -118,6 +119,22 @@ def build_agent(client: anthropic.Anthropic, variant: str) -> str:
     return agent.id, agent.version
 
 
+def get_memory_store_id() -> str:
+    """Resolve the persistent Memory store ID from the environment (d13).
+
+    No fallback to creating a store: a missing or invalid ID must fail
+    loudly here rather than silently isolating each session in its own
+    store, which is the failure mode that hid for a week (w5)."""
+    memory_store_id = os.environ.get("CLAIMS_REVIEW_MEMORY_STORE_ID")
+    if not memory_store_id:
+        raise RuntimeError(
+            "CLAIMS_REVIEW_MEMORY_STORE_ID is not set. The memory_on variant "
+            "requires the persistent Memory store ID — it will not create a "
+            "new store."
+        )
+    return memory_store_id
+
+
 def build_session(client: anthropic.Anthropic, agent_id: str, agent_version, variant: str):
     environment = client.beta.environments.create(
         name=f"claims-review-{variant}",
@@ -127,15 +144,11 @@ def build_session(client: anthropic.Anthropic, agent_id: str, agent_version, var
     resources = []
     memory_store_id = None
     if variant == "memory_on":
-        store = client.beta.memory_stores.create(
-            name="Claims Review Memory",
-            description="Prior claim rulings, keyed by product + claim_type, for consistency checks across review sessions.",
-        )
-        memory_store_id = store.id
+        memory_store_id = get_memory_store_id()
         resources.append(
             {
                 "type": "memory_store",
-                "memory_store_id": store.id,
+                "memory_store_id": memory_store_id,
                 "access": "read_only",
                 "instructions": "Check for a prior ruling on this product + claim_type before ruling.",
             }
