@@ -95,7 +95,13 @@ def build_agent(client: anthropic.Anthropic, variant: str) -> str:
                     "name": "write",
                     "enabled": True,
                     "permission_policy": {"type": "always_allow"},
-                }
+                },
+                {
+                    "type": "read",
+                    "name": "read",
+                    "enabled": True,
+                    "permission_policy": {"type": "always_allow"},
+                },
             ],
         },
     ]
