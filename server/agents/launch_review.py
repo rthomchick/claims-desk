@@ -8,15 +8,17 @@ Loads the corresponding generated prompt (review_agent_memory_on.md or
 review_agent_memory_off.md), connects the Claims Desk MCP server (six
 tools, already live at claims-desk-production-8424.up.railway.app/mcp),
 enables a Memory store only for the memory_on variant, submits the claim
-as a user.define_outcome graded against review_rubric.md, and prints the
-final ruling artifact, grading result, iteration count, and per-criterion
-feedback.
+as a user.define_outcome graded against review_rubric.md, retrieves the
+agent's ruling artifact from /mnt/session/outputs via the Files API, and
+prints it alongside the grading result, iteration count, and
+per-criterion feedback.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import anthropic
@@ -26,6 +28,8 @@ load_dotenv()
 
 AGENTS_DIR = Path(__file__).parent
 MCP_SERVER_URL = "https://claims-desk-production-8424.up.railway.app/mcp"
+FILES_BETA = "managed-agents-2026-04-01"
+OUTPUT_FILE_RETRY_DELAYS = (1.5, 1.5)
 
 PROMPT_FILES = {
     "memory_on": AGENTS_DIR / "review_agent_memory_on.md",
@@ -48,6 +52,18 @@ def build_agent(client: anthropic.Anthropic, variant: str) -> str:
             "type": "mcp_toolset",
             "mcp_server_name": "claims-desk",
             "default_config": {"enabled": True, "permission_policy": {"type": "always_allow"}},
+        },
+        {
+            "type": "agent_toolset_20260401",
+            "default_config": {"enabled": False},
+            "configs": [
+                {
+                    "type": "write",
+                    "name": "write",
+                    "enabled": True,
+                    "permission_policy": {"type": "always_allow"},
+                }
+            ],
         },
     ]
 
@@ -91,6 +107,32 @@ def build_session(client: anthropic.Anthropic, agent_id: str, agent_version, var
     return session
 
 
+def fetch_output_artifact(client: anthropic.Anthropic, session_id: str) -> str:
+    """Retrieve the agent's ruling from /mnt/session/outputs via the Files API.
+
+    Indexing lags status_idle by ~1-3s, so an empty list on the first
+    attempt is not a failure — retry a couple of times before giving up.
+    """
+    delays = (0.0, *OUTPUT_FILE_RETRY_DELAYS)
+    for delay in delays:
+        if delay:
+            time.sleep(delay)
+        files = list(
+            client.beta.files.list(scope_id=session_id, betas=[FILES_BETA])
+        )
+        if files:
+            break
+    else:
+        raise RuntimeError(
+            f"No output file found for session {session_id} after "
+            f"{len(delays)} attempts."
+        )
+
+    file = files[0]
+    content = client.beta.files.download(file.id, betas=[FILES_BETA])
+    return content.read().decode("utf-8")
+
+
 def run_review(claim_slug: str, variant: str) -> dict:
     client = anthropic.Anthropic()
 
@@ -100,7 +142,6 @@ def run_review(claim_slug: str, variant: str) -> dict:
     rubric_text = RUBRIC_FILE.read_text()
     description = f"Review the marketing claim {claim_slug} and produce a ruling."
 
-    last_message_text = ""
     outcome_result = None
     outcome_explanation = None
     last_iteration = None
@@ -119,11 +160,7 @@ def run_review(claim_slug: str, variant: str) -> dict:
         )
 
         for event in stream:
-            if event.type == "agent.message":
-                text_parts = [block.text for block in event.content if block.type == "text"]
-                if text_parts:
-                    last_message_text = "".join(text_parts)
-            elif event.type == "span.outcome_evaluation_end":
+            if event.type == "span.outcome_evaluation_end":
                 outcome_result = event.result
                 outcome_explanation = event.explanation
                 last_iteration = event.iteration
@@ -147,10 +184,10 @@ def run_review(claim_slug: str, variant: str) -> dict:
                     continue
                 break
 
-    ruling_text = last_message_text.strip()
+    ruling_text = fetch_output_artifact(client, session.id)
 
     return {
-        "ruling": ruling_text,
+        "ruling": ruling_text.strip(),
         "outcome_result": outcome_result,
         "outcome_explanation": outcome_explanation,
         "iteration_count": (last_iteration + 1) if last_iteration is not None else None,

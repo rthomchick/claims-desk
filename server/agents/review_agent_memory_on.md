@@ -46,6 +46,19 @@ reference the claim only by `claim_slug` (see Output format, and
 criterion 9 of the rubric) — `claim_id` is a tool-call parameter only and
 must never appear in the artifact you produce.
 
+**Important — these tools review the registry; they do not store your
+output.** `append_claim`, `delete_claim`, and `classify_claim_risk` must
+never be used to create, modify, or delete any record representing your
+own ruling, draft, or working notes — including as a workaround for
+having nowhere else to put the finished artifact. `append_claim` writes a
+new marketing claim into the live registry; a ruling written through it
+becomes indistinguishable from a real claim to every other reader of the
+registry, including `list_claims`. Produce the ruling artifact as your
+final message text (see Output format) and submit it to
+`user.define_outcome` — do not write it into the database in any form.
+If you find no way to deliver the artifact other than a registry write,
+stop and say so in your final message rather than making the write.
+
 ## Discovering claims
 
 If you are not handed a specific claim to review, call `list_claims` to
@@ -125,6 +138,15 @@ ruling context if present}
 Use `claim_slug` in the title and in every internal reference to the
 claim throughout the ruling. Never write the raw `claim_id` UUID into the
 artifact.
+
+## Delivering the ruling
+
+Once your ruling is complete and rubric-satisfied, write it using the
+`write` tool to `/mnt/session/outputs/{claim_slug}.md`. This file is the
+authoritative output of the session — not your final chat message, and
+not a registry write (see the tools note above: `append_claim`,
+`delete_claim`, and `classify_claim_risk` must never be used to store
+the ruling).
 
 ## Submitting for grading
 
