@@ -24,6 +24,8 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv
 
+from server.db.client import fetchone_dict
+
 load_dotenv()
 
 AGENTS_DIR = Path(__file__).parent
@@ -123,17 +125,19 @@ def build_session(client: anthropic.Anthropic, agent_id: str, agent_version, var
     )
 
     resources = []
+    memory_store_id = None
     if variant == "memory_on":
         store = client.beta.memory_stores.create(
             name="Claims Review Memory",
             description="Prior claim rulings, keyed by product + claim_type, for consistency checks across review sessions.",
         )
+        memory_store_id = store.id
         resources.append(
             {
                 "type": "memory_store",
                 "memory_store_id": store.id,
-                "access": "read_write",
-                "instructions": "Check for a prior ruling on this product + claim_type before ruling. Write this ruling back after submission.",
+                "access": "read_only",
+                "instructions": "Check for a prior ruling on this product + claim_type before ruling.",
             }
         )
 
@@ -143,7 +147,7 @@ def build_session(client: anthropic.Anthropic, agent_id: str, agent_version, var
         title=f"Claims review ({variant})",
         resources=resources or None,
     )
-    return session
+    return session, memory_store_id
 
 
 def fetch_output_artifact(client: anthropic.Anthropic, session_id: str) -> str:
@@ -172,11 +176,84 @@ def fetch_output_artifact(client: anthropic.Anthropic, session_id: str) -> str:
     return content.read().decode("utf-8")
 
 
+def get_claim_product_and_type(claim_slug: str) -> dict:
+    """Look up a claim's product_key and claim_type by claim_slug.
+
+    Reads the claims table directly rather than parsing claim_slug — the
+    slug's {product_key}-{claim_type}-{NN} shape is a d2 convention for
+    display, not a reliable inverse mapping.
+    """
+    claim = fetchone_dict(
+        "select product_key, claim_type from claims where claim_slug = %s",
+        (claim_slug,),
+    )
+    if claim is None:
+        raise RuntimeError(f"no claim found with claim_slug {claim_slug}")
+    return claim
+
+
+def write_ruling_to_memory(
+    client: anthropic.Anthropic,
+    memory_store_id: str,
+    product_key: str,
+    claim_type: str,
+    ruling_text: str,
+) -> None:
+    """Write a satisfied ruling to Memory, scoped by product_key + claim_type.
+
+    Called by the launcher, never the agent — the agent's memory_store
+    resource is read-only (d12). Path convention matches the existing
+    stores observed in Day 7's inspection: /{product_key}-{claim_type}.md
+    """
+    path = f"/{product_key}-{claim_type}.md"
+    client.beta.memory_stores.memories.create(
+        memory_store_id,
+        content=ruling_text,
+        path=path,
+    )
+
+
+def maybe_write_ruling_to_memory(
+    client: anthropic.Anthropic,
+    variant: str,
+    memory_store_id: str | None,
+    outcome_result: str | None,
+    claim_slug: str,
+    ruling_text: str,
+) -> bool:
+    """Gate the Memory write on grading == satisfied (d12). Returns whether
+    a write was attempted, and always prints the reason either way — this
+    observability is what f14 lacked."""
+    if variant != "memory_on":
+        print(f"Memory write skipped: variant is {variant!r}, not memory_on.")
+        return False
+    if outcome_result != "satisfied":
+        print(
+            f"Memory write skipped: grading result is {outcome_result!r}, "
+            "not 'satisfied'."
+        )
+        return False
+
+    claim = get_claim_product_and_type(claim_slug)
+    write_ruling_to_memory(
+        client,
+        memory_store_id,
+        claim["product_key"],
+        claim["claim_type"],
+        ruling_text,
+    )
+    print(
+        f"Memory write performed: grading result is 'satisfied' — wrote "
+        f"/{claim['product_key']}-{claim['claim_type']}.md."
+    )
+    return True
+
+
 def run_review(claim_slug: str, variant: str) -> dict:
     client = anthropic.Anthropic()
 
     agent_id, agent_version = build_agent(client, variant)
-    session = build_session(client, agent_id, agent_version, variant)
+    session, memory_store_id = build_session(client, agent_id, agent_version, variant)
 
     rubric_text = RUBRIC_FILE.read_text()
     description = f"Review the marketing claim {claim_slug} and produce a ruling."
@@ -236,13 +313,19 @@ def run_review(claim_slug: str, variant: str) -> dict:
         raise ProhibitedToolCallError(prohibited_calls)
 
     ruling_text = fetch_output_artifact(client, session.id)
+    ruling_text = ruling_text.strip()
+
+    memory_write_performed = maybe_write_ruling_to_memory(
+        client, variant, memory_store_id, outcome_result, claim_slug, ruling_text
+    )
 
     return {
-        "ruling": ruling_text.strip(),
+        "ruling": ruling_text,
         "outcome_result": outcome_result,
         "outcome_explanation": outcome_explanation,
         "iteration_count": (last_iteration + 1) if last_iteration is not None else None,
         "session_id": session.id,
+        "memory_write_performed": memory_write_performed,
     }
 
 

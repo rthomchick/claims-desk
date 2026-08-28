@@ -97,12 +97,9 @@ and claim type is exactly the signal this section exists to surface).
   exact string: `No prior ruling found in Memory for this product +
   claim_type.`
 
-After your ruling is submitted to `user.define_outcome` and comes back
-`satisfied`, write the completed ruling to Memory, scoped the same way
-(by `product_key` + `claim_type`), so future sessions reviewing a similar
-claim can find it. Do not write to Memory before the ruling has passed
-grading — an unsatisfied or abandoned draft should not become another
-session's "prior ruling."
+You do not write to Memory. This configuration's Memory access is
+read-only; the launcher writes the completed ruling back after grading,
+outside this session.
 
 ## Output format
 
