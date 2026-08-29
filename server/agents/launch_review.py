@@ -23,9 +23,11 @@ mount path or a substitution placeholder for one.
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 
 import anthropic
@@ -36,6 +38,8 @@ from server.db.client import fetchone_dict
 load_dotenv()
 
 AGENTS_DIR = Path(__file__).parent
+REPO_ROOT = AGENTS_DIR.parent.parent
+RUNS_DIR = REPO_ROOT / "runs"
 MCP_SERVER_URL = "https://claims-desk-production-8424.up.railway.app/mcp"
 FILES_BETA = "managed-agents-2026-04-01"
 OUTPUT_FILE_RETRY_DELAYS = (1.5, 1.5)
@@ -50,6 +54,103 @@ MODEL = "claude-opus-5"
 MAX_ITERATIONS = 3
 
 PROHIBITED_TOOLS = {"append_claim", "delete_claim", "classify_claim_risk"}
+
+
+class RunLog:
+    """Incremental per-run diagnostic log (d16).
+
+    Opened and flushed after every write so a crash mid-run leaves a
+    partial trace on disk rather than nothing — f18's tool-call trace,
+    session id, and file ids existed only in one process's memory and
+    were unrecoverable once that process exited. Writing on clean exit
+    only would not have helped; this writes as events occur.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._fh = open(path, "a", encoding="utf-8")
+
+    def write(self, text: str) -> None:
+        self._fh.write(text)
+        if not text.endswith("\n"):
+            self._fh.write("\n")
+        self._fh.flush()
+
+    def header(
+        self,
+        claim_slug: str,
+        variant: str,
+        agent_id: str,
+        session_id: str,
+        memory_store_id: str | None,
+        mount_path: str | None,
+    ) -> None:
+        self.write("=" * 70)
+        self.write(f"timestamp: {datetime.datetime.now(datetime.timezone.utc).isoformat()}")
+        self.write(f"claim_slug: {claim_slug}")
+        self.write(f"variant: {variant}")
+        self.write(f"agent_id: {agent_id}")
+        self.write(f"session_id: {session_id}")
+        self.write(f"memory_store_id: {memory_store_id}")
+        self.write(f"mount_path: {mount_path}")
+        self.write("=" * 70)
+
+    def tool_call(self, event_type: str, name: str, arguments: dict) -> None:
+        self.write(f"TOOL CALL [{event_type}] {name} args={arguments!r}")
+
+    def agent_message(self, text: str) -> None:
+        self.write(f"AGENT MESSAGE: {text}")
+
+    def files_list(self, files: list, selected_index: int, selection_rule: str) -> None:
+        self.write("-" * 70)
+        self.write(f"files.list response ({len(files)} file(s)):")
+        for i, f in enumerate(files):
+            marker = " <-- SELECTED" if i == selected_index else ""
+            self.write(
+                f"  [{i}] id={f.id} name={getattr(f, 'filename', None)} "
+                f"size={getattr(f, 'size_bytes', None)} "
+                f"created={getattr(f, 'created_at', None)}{marker}"
+            )
+        self.write(f"selection rule: {selection_rule}")
+        self.write("-" * 70)
+
+    def ruling(self, ruling_text: str) -> None:
+        self.write("-" * 70)
+        self.write("RULING ARTIFACT")
+        self.write("-" * 70)
+        self.write(ruling_text)
+
+    def grading(
+        self,
+        outcome_result: str | None,
+        outcome_explanation: str | None,
+        iteration_count: int | None,
+    ) -> None:
+        self.write("-" * 70)
+        self.write("GRADING RESULT")
+        self.write(f"result: {outcome_result}")
+        self.write(f"iterations: {iteration_count}")
+        if outcome_explanation:
+            self.write(f"per-criterion feedback:\n{outcome_explanation}")
+        self.write("-" * 70)
+
+    def memory_write_decision(self, reason: str) -> None:
+        self.write(f"MEMORY WRITE DECISION: {reason}")
+
+    def exception(self, exc: BaseException) -> None:
+        self.write("=" * 70)
+        self.write("EXCEPTION")
+        self.write("=" * 70)
+        self.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+
+    def close(self) -> None:
+        self._fh.close()
+
+
+def make_run_log_path(claim_slug: str, variant: str) -> Path:
+    RUNS_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return RUNS_DIR / f"{timestamp}-{claim_slug}-{variant}.log"
 
 
 class ProhibitedToolCallError(RuntimeError):
@@ -169,11 +270,17 @@ def build_session(client: anthropic.Anthropic, agent_id: str, agent_version, var
     return session, memory_store_id
 
 
-def fetch_output_artifact(client: anthropic.Anthropic, session_id: str) -> str:
+def fetch_output_artifact(
+    client: anthropic.Anthropic, session_id: str, run_log: RunLog | None = None
+) -> str:
     """Retrieve the agent's ruling from /mnt/session/outputs via the Files API.
 
     Indexing lags status_idle by ~1-3s, so an empty list on the first
     attempt is not a failure — retry a couple of times before giving up.
+
+    Selects files[0], unvalidated (f17 — deliberately not fixed here, see
+    d16). The full files.list response is logged regardless of which file
+    is selected, so the log records this behavior rather than hiding it.
     """
     delays = (0.0, *OUTPUT_FILE_RETRY_DELAYS)
     for delay in delays:
@@ -191,6 +298,8 @@ def fetch_output_artifact(client: anthropic.Anthropic, session_id: str) -> str:
         )
 
     file = files[0]
+    if run_log is not None:
+        run_log.files_list(files, selected_index=0, selection_rule="index 0, unvalidated (f17)")
     content = client.beta.files.download(file.id, betas=[FILES_BETA])
     return content.read().decode("utf-8")
 
@@ -269,32 +378,42 @@ def maybe_write_ruling_to_memory(
     outcome_result: str | None,
     claim_slug: str,
     ruling_text: str,
+    run_log: RunLog | None = None,
 ) -> bool:
     """Gate the Memory write on grading == satisfied (d12). Returns whether
     a write was attempted, and always prints the reason either way — this
     observability is what f14 lacked."""
     if variant != "memory_on":
-        print(f"Memory write skipped: variant is {variant!r}, not memory_on.")
+        reason = f"Memory write skipped: variant is {variant!r}, not memory_on."
+        print(reason)
+        if run_log is not None:
+            run_log.memory_write_decision(reason)
         return False
     if outcome_result != "satisfied":
-        print(
+        reason = (
             f"Memory write skipped: grading result is {outcome_result!r}, "
             "not 'satisfied'."
         )
+        print(reason)
+        if run_log is not None:
+            run_log.memory_write_decision(reason)
         return False
 
     claim = get_claim_product_and_type(claim_slug)
-    reason = write_ruling_to_memory(
+    write_reason = write_ruling_to_memory(
         client,
         memory_store_id,
         claim["product_key"],
         claim["claim_type"],
         ruling_text,
     )
-    print(
-        f"Memory write performed: grading result is 'satisfied' — {reason} "
+    reason = (
+        f"Memory write performed: grading result is 'satisfied' — {write_reason} "
         f"/{claim['product_key']}-{claim['claim_type']}.md."
     )
+    print(reason)
+    if run_log is not None:
+        run_log.memory_write_decision(reason)
     return True
 
 
@@ -303,6 +422,7 @@ def print_ruling_and_grading(
     outcome_result: str | None,
     outcome_explanation: str | None,
     last_iteration: int | None,
+    run_log: RunLog | None = None,
 ) -> None:
     """Print the ruling artifact and grading result. Must run before any
     Memory write is attempted (d14) — the deliverable has to reach stdout
@@ -321,6 +441,10 @@ def print_ruling_and_grading(
     if outcome_explanation:
         print(f"Per-criterion feedback:\n{outcome_explanation}")
 
+    if run_log is not None:
+        run_log.ruling(ruling_text)
+        run_log.grading(outcome_result, outcome_explanation, iteration_count)
+
 
 def get_memory_mount_path(session) -> str | None:
     """Read the memory_store resource's API-provided mount_path off a
@@ -335,112 +459,142 @@ def get_memory_mount_path(session) -> str | None:
 
 
 def run_review(claim_slug: str, variant: str) -> dict:
-    client = anthropic.Anthropic()
+    run_log_path = make_run_log_path(claim_slug, variant)
+    print(f"Run log: {run_log_path}")
+    run_log = RunLog(run_log_path)
 
-    agent_id, agent_version = build_agent(client, variant)
-    session, memory_store_id = build_session(client, agent_id, agent_version, variant)
+    try:
+        client = anthropic.Anthropic()
 
-    rubric_text = RUBRIC_FILE.read_text()
-    description = f"Review the marketing claim {claim_slug} and produce a ruling."
+        agent_id, agent_version = build_agent(client, variant)
+        session, memory_store_id = build_session(client, agent_id, agent_version, variant)
 
-    outcome_result = None
-    outcome_explanation = None
-    last_iteration = None
-    tool_call_events = []
+        mount_path = get_memory_mount_path(session) if variant == "memory_on" else None
+        run_log.header(
+            claim_slug, variant, agent_id, session.id, memory_store_id, mount_path
+        )
 
-    events_to_send = []
-    if variant == "memory_on":
-        mount_path = get_memory_mount_path(session)
-        if not mount_path:
-            raise RuntimeError(
-                f"variant is memory_on but session {session.id} has no "
-                "memory_store resource with a mount_path — cannot tell "
-                "the agent where to look for a prior ruling."
+        rubric_text = RUBRIC_FILE.read_text()
+        description = f"Review the marketing claim {claim_slug} and produce a ruling."
+
+        outcome_result = None
+        outcome_explanation = None
+        last_iteration = None
+        tool_call_events = []
+
+        events_to_send = []
+        if variant == "memory_on":
+            if not mount_path:
+                raise RuntimeError(
+                    f"variant is memory_on but session {session.id} has no "
+                    "memory_store resource with a mount_path — cannot tell "
+                    "the agent where to look for a prior ruling."
+                )
+            events_to_send.append(
+                {
+                    "type": "user.message",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                f"The Memory store for this session is mounted "
+                                f"at {mount_path}."
+                            ),
+                        }
+                    ],
+                }
             )
         events_to_send.append(
             {
-                "type": "user.message",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            f"The Memory store for this session is mounted "
-                            f"at {mount_path}."
-                        ),
-                    }
-                ],
+                "type": "user.define_outcome",
+                "description": description,
+                "rubric": {"type": "text", "content": rubric_text},
+                "max_iterations": MAX_ITERATIONS,
             }
         )
-    events_to_send.append(
-        {
-            "type": "user.define_outcome",
-            "description": description,
-            "rubric": {"type": "text", "content": rubric_text},
-            "max_iterations": MAX_ITERATIONS,
+
+        with client.beta.sessions.events.stream(session_id=session.id) as stream:
+            client.beta.sessions.events.send(
+                session_id=session.id,
+                events=events_to_send,
+            )
+
+            for event in stream:
+                if event.type == "span.outcome_evaluation_end":
+                    outcome_result = event.result
+                    outcome_explanation = event.explanation
+                    last_iteration = event.iteration
+                elif event.type in (
+                    "agent.tool_use",
+                    "agent.mcp_tool_use",
+                    "agent.custom_tool_use",
+                ):
+                    if event.type in ("agent.tool_use", "agent.mcp_tool_use"):
+                        tool_call_events.append(event)
+                    run_log.tool_call(event.type, event.name, event.input)
+                    if getattr(event, "evaluated_permission", None) == "ask":
+                        client.beta.sessions.events.send(
+                            session_id=session.id,
+                            events=[
+                                {
+                                    "type": "user.tool_confirmation",
+                                    "tool_use_id": event.id,
+                                    "result": "allow",
+                                }
+                            ],
+                        )
+                elif event.type == "agent.message":
+                    for block in event.content:
+                        if getattr(block, "type", None) == "text":
+                            run_log.agent_message(block.text)
+
+                if event.type == "session.status_terminated":
+                    break
+                if event.type == "session.status_idle":
+                    if event.stop_reason.type == "requires_action":
+                        continue
+                    break
+
+        if check_for_prohibited_tool_calls(tool_call_events):
+            prohibited_calls = sorted(
+                {
+                    event.name
+                    for event in tool_call_events
+                    if event.name in PROHIBITED_TOOLS
+                }
+            )
+            raise ProhibitedToolCallError(prohibited_calls)
+
+        ruling_text = fetch_output_artifact(client, session.id, run_log=run_log)
+        ruling_text = ruling_text.strip()
+
+        print_ruling_and_grading(
+            ruling_text, outcome_result, outcome_explanation, last_iteration, run_log=run_log
+        )
+
+        memory_write_performed = maybe_write_ruling_to_memory(
+            client,
+            variant,
+            memory_store_id,
+            outcome_result,
+            claim_slug,
+            ruling_text,
+            run_log=run_log,
+        )
+
+        return {
+            "ruling": ruling_text,
+            "outcome_result": outcome_result,
+            "outcome_explanation": outcome_explanation,
+            "iteration_count": (last_iteration + 1) if last_iteration is not None else None,
+            "session_id": session.id,
+            "memory_write_performed": memory_write_performed,
         }
-    )
-
-    with client.beta.sessions.events.stream(session_id=session.id) as stream:
-        client.beta.sessions.events.send(
-            session_id=session.id,
-            events=events_to_send,
-        )
-
-        for event in stream:
-            if event.type == "span.outcome_evaluation_end":
-                outcome_result = event.result
-                outcome_explanation = event.explanation
-                last_iteration = event.iteration
-            elif event.type in ("agent.tool_use", "agent.mcp_tool_use"):
-                tool_call_events.append(event)
-                if getattr(event, "evaluated_permission", None) == "ask":
-                    client.beta.sessions.events.send(
-                        session_id=session.id,
-                        events=[
-                            {
-                                "type": "user.tool_confirmation",
-                                "tool_use_id": event.id,
-                                "result": "allow",
-                            }
-                        ],
-                    )
-
-            if event.type == "session.status_terminated":
-                break
-            if event.type == "session.status_idle":
-                if event.stop_reason.type == "requires_action":
-                    continue
-                break
-
-    if check_for_prohibited_tool_calls(tool_call_events):
-        prohibited_calls = sorted(
-            {
-                event.name
-                for event in tool_call_events
-                if event.name in PROHIBITED_TOOLS
-            }
-        )
-        raise ProhibitedToolCallError(prohibited_calls)
-
-    ruling_text = fetch_output_artifact(client, session.id)
-    ruling_text = ruling_text.strip()
-
-    print_ruling_and_grading(
-        ruling_text, outcome_result, outcome_explanation, last_iteration
-    )
-
-    memory_write_performed = maybe_write_ruling_to_memory(
-        client, variant, memory_store_id, outcome_result, claim_slug, ruling_text
-    )
-
-    return {
-        "ruling": ruling_text,
-        "outcome_result": outcome_result,
-        "outcome_explanation": outcome_explanation,
-        "iteration_count": (last_iteration + 1) if last_iteration is not None else None,
-        "session_id": session.id,
-        "memory_write_performed": memory_write_performed,
-    }
+    except BaseException as e:
+        run_log.exception(e)
+        raise
+    finally:
+        run_log.close()
 
 
 def main() -> None:

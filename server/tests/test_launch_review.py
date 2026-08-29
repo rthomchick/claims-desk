@@ -14,14 +14,19 @@ import pytest
 
 import anthropic
 
+from server.agents import launch_review
 from server.agents.launch_review import (
     PROMPT_FILES,
+    RunLog,
     build_session,
     check_for_prohibited_tool_calls,
+    fetch_output_artifact,
     get_memory_mount_path,
     get_memory_store_id,
+    make_run_log_path,
     maybe_write_ruling_to_memory,
     print_ruling_and_grading,
+    run_review,
     write_ruling_to_memory,
 )
 
@@ -324,3 +329,207 @@ def test_memory_on_prompt_has_no_literal_or_placeholder_path():
     assert "{{MEMORY_MOUNT_PATH}}" not in text
     assert "/mnt/memory" not in text
     assert "first user message" in text
+
+
+# --- d16: incremental run log ---
+
+
+def _stub_client(monkeypatch, runs_dir):
+    """Build a fully mocked anthropic.Anthropic() client and patch
+    run_review's dependencies so it runs end-to-end against fakes: no
+    live session, no network. Returns (client, stream_events) so a test
+    can populate stream_events before calling run_review."""
+    monkeypatch.setattr(launch_review, "RUNS_DIR", runs_dir)
+
+    client = MagicMock()
+
+    monkeypatch.setattr(
+        launch_review,
+        "build_agent",
+        lambda client, variant: ("agent_abc123", 1),
+    )
+
+    session = SimpleNamespace(id="sess_xyz789", resources=[])
+
+    def fake_build_session(client, agent_id, agent_version, variant):
+        return session, ("memstore_test123" if variant == "memory_on" else None)
+
+    monkeypatch.setattr(launch_review, "build_session", fake_build_session)
+    monkeypatch.setattr(
+        launch_review, "get_memory_mount_path", lambda s: "/mnt/memory/store"
+    )
+    monkeypatch.setattr(
+        launch_review,
+        "RUBRIC_FILE",
+        SimpleNamespace(read_text=lambda: "rubric text"),
+    )
+    monkeypatch.setattr(
+        launch_review, "check_for_prohibited_tool_calls", lambda events: False
+    )
+    monkeypatch.setattr(
+        launch_review,
+        "maybe_write_ruling_to_memory",
+        lambda *a, **k: False,
+    )
+
+    stream_events = []
+
+    class FakeStream:
+        def __enter__(self):
+            return iter(stream_events)
+
+        def __exit__(self, *exc_info):
+            return False
+
+    client.beta.sessions.events.stream.return_value = FakeStream()
+
+    return client, stream_events
+
+
+def _idle_event():
+    return SimpleNamespace(type="session.status_idle", stop_reason=SimpleNamespace(type="done"))
+
+
+def test_log_file_created_with_header_before_any_agent_turn(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, run_log=None: "the ruling",
+    )
+
+    run_review("acme-widget-performance-01", "memory_on")
+
+    logs = list(tmp_path.glob("*.log"))
+    assert len(logs) == 1
+    content = logs[0].read_text()
+    assert "claim_slug: acme-widget-performance-01" in content
+    assert "variant: memory_on" in content
+    assert "agent_id: agent_abc123" in content
+    assert "session_id: sess_xyz789" in content
+    assert "memory_store_id: memstore_test123" in content
+    assert "mount_path: /mnt/memory/store" in content
+
+
+def test_partial_log_survives_mid_run_exception(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+
+    class BoomStream:
+        def __enter__(self):
+            raise RuntimeError("simulated mid-run failure")
+
+        def __exit__(self, *exc_info):
+            return False
+
+    client.beta.sessions.events.stream.return_value = BoomStream()
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+
+    with pytest.raises(RuntimeError, match="simulated mid-run failure"):
+        run_review("acme-widget-performance-01", "memory_off")
+
+    logs = list(tmp_path.glob("*.log"))
+    assert len(logs) == 1
+    content = logs[0].read_text()
+    assert "claim_slug: acme-widget-performance-01" in content
+    assert "agent_id: agent_abc123" in content
+    assert "EXCEPTION" in content
+    assert "simulated mid-run failure" in content
+    assert "Traceback" in content
+
+
+def test_multi_file_files_list_logs_all_files_not_just_first(tmp_path):
+    run_log = RunLog(tmp_path / "test.log")
+    client = MagicMock()
+    files = [
+        SimpleNamespace(id="file_first", filename="ruling_a.md", size_bytes=100, created_at="t1"),
+        SimpleNamespace(id="file_second", filename="ruling_b.md", size_bytes=200, created_at="t2"),
+        SimpleNamespace(id="file_third", filename="ruling_c.md", size_bytes=300, created_at="t3"),
+    ]
+    client.beta.files.list.return_value = files
+    download_response = MagicMock()
+    download_response.read.return_value = b"ruling content"
+    client.beta.files.download.return_value = download_response
+
+    fetch_output_artifact(client, "sess_xyz789", run_log=run_log)
+    run_log.close()
+
+    content = (tmp_path / "test.log").read_text()
+    assert "file_first" in content
+    assert "file_second" in content
+    assert "file_third" in content
+    assert "ruling_a.md" in content
+    assert "ruling_b.md" in content
+    assert "ruling_c.md" in content
+    assert "[0]" in content and "SELECTED" in content
+    # only the first is selected (f17, unchanged)
+    client.beta.files.download.assert_called_once_with("file_first", betas=[launch_review.FILES_BETA])
+
+
+def test_tool_call_arguments_appear_in_log(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(
+        SimpleNamespace(
+            type="agent.mcp_tool_use",
+            id="tu_1",
+            name="list_claims",
+            input={"product_key": "kalder_govern"},
+            evaluated_permission=None,
+        )
+    )
+    stream_events.append(_idle_event())
+
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, run_log=None: "the ruling",
+    )
+
+    run_review("acme-widget-performance-01", "memory_on")
+
+    logs = list(tmp_path.glob("*.log"))
+    content = logs[0].read_text()
+    assert "list_claims" in content
+    assert "product_key" in content
+    assert "kalder_govern" in content
+
+
+def test_agent_conversational_message_logged(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(
+        SimpleNamespace(
+            type="agent.message",
+            id="msg_1",
+            content=[SimpleNamespace(type="text", text="Checking prior rulings first.")],
+        )
+    )
+    stream_events.append(_idle_event())
+
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, run_log=None: "the ruling",
+    )
+
+    run_review("acme-widget-performance-01", "memory_on")
+
+    logs = list(tmp_path.glob("*.log"))
+    content = logs[0].read_text()
+    assert "AGENT MESSAGE" in content
+    assert "Checking prior rulings first." in content
+
+
+def test_make_run_log_path_creates_runs_dir(monkeypatch, tmp_path):
+    runs_dir = tmp_path / "runs"
+    monkeypatch.setattr(launch_review, "RUNS_DIR", runs_dir)
+
+    path = make_run_log_path("acme-widget-performance-01", "memory_off")
+
+    assert runs_dir.is_dir()
+    assert path.parent == runs_dir
+    assert "acme-widget-performance-01" in path.name
+    assert "memory_off" in path.name
