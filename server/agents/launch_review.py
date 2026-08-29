@@ -12,6 +12,12 @@ as a user.define_outcome graded against review_rubric.md, retrieves the
 agent's ruling artifact from /mnt/session/outputs via the Files API, and
 prints it alongside the grading result, iteration count, and
 per-criterion feedback.
+
+For memory_on, the store's mount path is read from the API (the
+memory_store session resource's output-only `mount_path` field, populated
+once the session is created — d15) and sent to the agent as a user.message
+before user.define_outcome. The system prompt never contains a literal
+mount path or a substitution placeholder for one.
 """
 
 from __future__ import annotations
@@ -316,6 +322,18 @@ def print_ruling_and_grading(
         print(f"Per-criterion feedback:\n{outcome_explanation}")
 
 
+def get_memory_mount_path(session) -> str | None:
+    """Read the memory_store resource's API-provided mount_path off a
+    created session (d15). Output-only field, populated by the server —
+    never derived client-side. Returns None if the session has no
+    memory_store resource attached (memory_off).
+    """
+    for resource in session.resources:
+        if resource.type == "memory_store":
+            return resource.mount_path
+    return None
+
+
 def run_review(claim_slug: str, variant: str) -> dict:
     client = anthropic.Anthropic()
 
@@ -330,17 +348,42 @@ def run_review(claim_slug: str, variant: str) -> dict:
     last_iteration = None
     tool_call_events = []
 
+    events_to_send = []
+    if variant == "memory_on":
+        mount_path = get_memory_mount_path(session)
+        if not mount_path:
+            raise RuntimeError(
+                f"variant is memory_on but session {session.id} has no "
+                "memory_store resource with a mount_path — cannot tell "
+                "the agent where to look for a prior ruling."
+            )
+        events_to_send.append(
+            {
+                "type": "user.message",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"The Memory store for this session is mounted "
+                            f"at {mount_path}."
+                        ),
+                    }
+                ],
+            }
+        )
+    events_to_send.append(
+        {
+            "type": "user.define_outcome",
+            "description": description,
+            "rubric": {"type": "text", "content": rubric_text},
+            "max_iterations": MAX_ITERATIONS,
+        }
+    )
+
     with client.beta.sessions.events.stream(session_id=session.id) as stream:
         client.beta.sessions.events.send(
             session_id=session.id,
-            events=[
-                {
-                    "type": "user.define_outcome",
-                    "description": description,
-                    "rubric": {"type": "text", "content": rubric_text},
-                    "max_iterations": MAX_ITERATIONS,
-                }
-            ],
+            events=events_to_send,
         )
 
         for event in stream:

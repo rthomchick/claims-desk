@@ -15,8 +15,10 @@ import pytest
 import anthropic
 
 from server.agents.launch_review import (
+    PROMPT_FILES,
     build_session,
     check_for_prohibited_tool_calls,
+    get_memory_mount_path,
     get_memory_store_id,
     maybe_write_ruling_to_memory,
     print_ruling_and_grading,
@@ -263,3 +265,62 @@ def test_memory_write_raises_ruling_already_printed(capsys):
     out = capsys.readouterr().out
     assert "the ruling text" in out
     assert "RULING ARTIFACT" in out
+
+
+# --- d15: mount path is API-read, delivered via user.message, never a
+# hardcoded or template-substituted string ---
+
+
+def test_get_memory_mount_path_reads_api_field_from_session():
+    session = SimpleNamespace(
+        resources=[
+            SimpleNamespace(
+                type="memory_store",
+                memory_store_id="memstore_abc123",
+                mount_path="/mnt/memory/claims-review-memory-persistent",
+            )
+        ]
+    )
+
+    assert (
+        get_memory_mount_path(session)
+        == "/mnt/memory/claims-review-memory-persistent"
+    )
+
+
+def test_get_memory_mount_path_none_when_no_memory_store_resource():
+    session = SimpleNamespace(resources=[])
+
+    assert get_memory_mount_path(session) is None
+
+
+def test_get_memory_mount_path_ignores_non_memory_resources():
+    session = SimpleNamespace(
+        resources=[
+            SimpleNamespace(type="file", mount_path="/mnt/session/uploads/foo"),
+        ]
+    )
+
+    assert get_memory_mount_path(session) is None
+
+
+def test_memory_off_prompt_has_no_mount_path_or_memory_references():
+    text = PROMPT_FILES["memory_off"].read_text()
+
+    assert "/mnt/memory" not in text
+    assert "{{MEMORY_MOUNT_PATH}}" not in text
+    assert "mount_path" not in text
+    assert "mounted at" not in text
+    assert "no memory capability" in text
+
+
+def test_memory_on_prompt_has_no_literal_or_placeholder_path():
+    """The system prompt states the mechanism (path arrives via the first
+    user message) but never contains a literal mount path or an
+    unresolved {{...}} substitution token — the launcher injects the
+    real value into a user.message event at runtime, not into this file."""
+    text = PROMPT_FILES["memory_on"].read_text()
+
+    assert "{{MEMORY_MOUNT_PATH}}" not in text
+    assert "/mnt/memory" not in text
+    assert "first user message" in text

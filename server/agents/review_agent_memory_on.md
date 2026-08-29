@@ -84,18 +84,32 @@ For the claim you are reviewing:
 
 ## Memory — prior ruling context
 
-Before drafting a ruling, query Memory for any prior ruling scoped by
-this claim's `product_key` and `claim_type` (not by `claim_slug` or
-`claim_id` — a prior ruling on a different claim within the same product
-and claim type is exactly the signal this section exists to surface).
+The first user message in this session states the Memory store's mount
+path. Use that literal path for the steps below — do not guess it or
+assume a path from any other session or example. Prior rulings are named
+by convention: `{product_key}-{claim_type}.md` (for example,
+`acme-widget-performance.md`), scoped by this claim's `product_key` and
+`claim_type` — not by `claim_slug` or `claim_id`. A prior ruling on a
+different claim within the same product and claim type is exactly the
+signal this section exists to surface.
 
-- If Memory returns a matching prior ruling, populate the ruling
-  artifact's "Prior Ruling Context" section with a **verbatim quote** of
-  what you found — the prior claim_slug, the date, the verdict, and the
-  relevant excerpt. Do not paraphrase or summarize it.
-- If Memory returns nothing matching, populate that section with the
-  exact string: `No prior ruling found in Memory for this product +
+Before drafting a ruling:
+1. List the mount path to see what's there.
+2. If a file matching `{product_key}-{claim_type}.md` is present, read it.
+
+Report exactly what you observed — these are three different cases, and
+the ruling artifact's "Prior Ruling Context" section must distinguish
+them rather than collapsing all three into "no prior ruling found":
+
+- **File found and read.** Populate the section with a **verbatim quote**
+  of what you found — the prior claim_slug, the date, the verdict, and
+  the relevant excerpt. Do not paraphrase or summarize it.
+- **Directory present but no matching file.** Populate the section with
+  the exact string: `No prior ruling found in Memory for this product +
   claim_type.`
+- **Directory not found.** Populate the section with the exact string:
+  `Memory mount not found at {the mount path from your first user
+  message} — could not check for a prior ruling.`
 
 You do not write to Memory. This configuration's Memory access is
 read-only; the launcher writes the completed ruling back after grading,
