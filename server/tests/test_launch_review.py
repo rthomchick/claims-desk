@@ -638,4 +638,114 @@ def test_make_run_log_path_creates_runs_dir(monkeypatch, tmp_path):
     assert runs_dir.is_dir()
     assert path.parent == runs_dir
     assert "acme-widget-performance-01" in path.name
-    assert "memory_off" in path.name
+
+
+# --- d18: injected user.message names the target claim and forbids early
+# action (fixes f18: agent picked its own claim before user.define_outcome
+# arrived) ---
+
+
+def _sent_events(client):
+    """Extract the `events` kwarg from the single events.send() call made
+    by run_review for the pre-outcome injection + define_outcome."""
+    _, kwargs = client.beta.sessions.events.send.call_args
+    return kwargs["events"]
+
+
+def test_injected_message_names_claim_slug(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("kalder_govern-compliance-01", "memory_on")
+
+    events = _sent_events(client)
+    message_event = next(e for e in events if e["type"] == "user.message")
+    text = message_event["content"][0]["text"]
+    assert "kalder_govern-compliance-01" in text
+
+
+def test_injected_message_carries_mount_path(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("kalder_govern-compliance-01", "memory_on")
+
+    events = _sent_events(client)
+    message_event = next(e for e in events if e["type"] == "user.message")
+    text = message_event["content"][0]["text"]
+    assert "/mnt/memory/store" in text
+
+
+def test_injected_message_forbids_action_before_outcome(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("kalder_govern-compliance-01", "memory_on")
+
+    events = _sent_events(client)
+    assert events[0]["type"] == "user.message"
+    assert events[1]["type"] == "user.define_outcome"
+    text = events[0]["content"][0]["text"]
+    lowered = text.lower()
+    assert "not" in lowered and ("tool" in lowered or "action" in lowered)
+    assert "ruling" in lowered
+
+
+def test_injected_claim_slug_matches_define_outcome_source(monkeypatch, tmp_path):
+    """Both the injected message and user.define_outcome must name the same
+    claim, derived from the same run_review argument — not two independent
+    sources of truth."""
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("kalder_govern-compliance-01", "memory_on")
+
+    events = _sent_events(client)
+    message_event = next(e for e in events if e["type"] == "user.message")
+    outcome_event = next(e for e in events if e["type"] == "user.define_outcome")
+    message_text = message_event["content"][0]["text"]
+    outcome_description = outcome_event["description"]
+
+    assert "kalder_govern-compliance-01" in message_text
+    assert "kalder_govern-compliance-01" in outcome_description
+
+
+def test_memory_off_sends_no_injected_message(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("acme-widget-performance-01", "memory_off")
+
+    events = _sent_events(client)
+    assert len(events) == 1
+    assert events[0]["type"] == "user.define_outcome"

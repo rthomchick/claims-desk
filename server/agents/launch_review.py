@@ -556,8 +556,16 @@ def run_review(claim_slug: str, variant: str) -> dict:
                         {
                             "type": "text",
                             "text": (
-                                f"The Memory store for this session is mounted "
-                                f"at {mount_path}."
+                                f"The target claim for this session is "
+                                f"{claim_slug}. Do not take any action, call "
+                                f"any tool, or produce a ruling yet — the "
+                                f"rubric and task instructions will follow "
+                                f"in a separate message. When you do write "
+                                f"your ruling, write exactly one output "
+                                f"file, /mnt/session/outputs/{claim_slug}.md, "
+                                f"for this claim only.\n\n"
+                                f"The Memory store for this session is "
+                                f"mounted at {mount_path}."
                             ),
                         }
                     ],
