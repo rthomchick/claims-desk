@@ -101,11 +101,11 @@ class RunLog:
     def agent_message(self, text: str) -> None:
         self.write(f"AGENT MESSAGE: {text}")
 
-    def files_list(self, files: list, selected_index: int, selection_rule: str) -> None:
+    def files_list(self, files: list, selected_indices: list[int], selection_rule: str) -> None:
         self.write("-" * 70)
         self.write(f"files.list response ({len(files)} file(s)):")
         for i, f in enumerate(files):
-            marker = " <-- SELECTED" if i == selected_index else ""
+            marker = " <-- SELECTED" if i in selected_indices else ""
             self.write(
                 f"  [{i}] id={f.id} name={getattr(f, 'filename', None)} "
                 f"size={getattr(f, 'size_bytes', None)} "
@@ -113,6 +113,13 @@ class RunLog:
             )
         self.write(f"selection rule: {selection_rule}")
         self.write("-" * 70)
+
+    def unexpected_artifact(self, file) -> None:
+        self.write(
+            "UNEXPECTED ARTIFACT (not selected): "
+            f"name={getattr(file, 'filename', None)} id={file.id} "
+            f"created={getattr(file, 'created_at', None)}"
+        )
 
     def ruling(self, ruling_text: str) -> None:
         self.write("-" * 70)
@@ -271,35 +278,87 @@ def build_session(client: anthropic.Anthropic, agent_id: str, agent_version, var
 
 
 def fetch_output_artifact(
-    client: anthropic.Anthropic, session_id: str, run_log: RunLog | None = None
+    client: anthropic.Anthropic,
+    session_id: str,
+    claim_slug: str,
+    run_log: RunLog | None = None,
 ) -> str:
     """Retrieve the agent's ruling from /mnt/session/outputs via the Files API.
 
     Indexing lags status_idle by ~1-3s, so an empty list on the first
     attempt is not a failure — retry a couple of times before giving up.
 
-    Selects files[0], unvalidated (f17 — deliberately not fixed here, see
-    d16). The full files.list response is logged regardless of which file
-    is selected, so the log records this behavior rather than hiding it.
+    Selects by filename, not index (d17 — fixes f17). The agent is told in
+    its system prompt to write its ruling to
+    `/mnt/session/outputs/{claim_slug}.md` (see review_agent_memory_on.md
+    and review_agent_memory_off.md, "Delivering the ruling"), so the
+    expected filename is derived from the claim_slug the launcher was
+    invoked with — not from position in the list.
+
+    - Exactly one file matching `{claim_slug}.md`: select it.
+    - Zero matches: retry (the indexing lag above), then raise naming the
+      expected filename and what was actually present.
+    - More than one match: raise immediately — an ambiguous match is not
+      safe to guess at, and retrying won't resolve a duplicate.
+
+    Any other file present (not matching the expected name) is logged as
+    a named anomaly, since a stray artifact from a prior run in the same
+    session's outputs is exactly how f18 happened.
+
+    The full files.list response is logged regardless of outcome, so the
+    log records what was actually there rather than hiding it.
     """
+    expected_filename = f"{claim_slug}.md"
     delays = (0.0, *OUTPUT_FILE_RETRY_DELAYS)
+    matches: list = []
+    files: list = []
     for delay in delays:
         if delay:
             time.sleep(delay)
         files = list(
             client.beta.files.list(scope_id=session_id, betas=[FILES_BETA])
         )
-        if files:
+        matches = [f for f in files if getattr(f, "filename", None) == expected_filename]
+        if matches:
             break
-    else:
+
+    if len(matches) > 1:
+        if run_log is not None:
+            run_log.files_list(
+                files,
+                selected_indices=[files.index(f) for f in matches],
+                selection_rule=f"filename == {expected_filename!r} (d17)",
+            )
         raise RuntimeError(
-            f"No output file found for session {session_id} after "
-            f"{len(delays)} attempts."
+            f"Multiple output files matched {expected_filename!r} for session "
+            f"{session_id}: {[getattr(f, 'filename', None) for f in matches]}. "
+            "Refusing to guess which is authoritative."
         )
 
-    file = files[0]
+    if not matches:
+        if run_log is not None:
+            run_log.files_list(
+                files,
+                selected_indices=[],
+                selection_rule=f"filename == {expected_filename!r} (d17)",
+            )
+        raise RuntimeError(
+            f"No output file named {expected_filename!r} found for session "
+            f"{session_id} after {len(delays)} attempts. Files present: "
+            f"{[getattr(f, 'filename', None) for f in files]}."
+        )
+
+    file = matches[0]
     if run_log is not None:
-        run_log.files_list(files, selected_index=0, selection_rule="index 0, unvalidated (f17)")
+        run_log.files_list(
+            files,
+            selected_indices=[files.index(file)],
+            selection_rule=f"filename == {expected_filename!r} (d17)",
+        )
+        for f in files:
+            if f is not file:
+                run_log.unexpected_artifact(f)
+
     content = client.beta.files.download(file.id, betas=[FILES_BETA])
     return content.read().decode("utf-8")
 
@@ -565,7 +624,7 @@ def run_review(claim_slug: str, variant: str) -> dict:
             )
             raise ProhibitedToolCallError(prohibited_calls)
 
-        ruling_text = fetch_output_artifact(client, session.id, run_log=run_log)
+        ruling_text = fetch_output_artifact(client, session.id, claim_slug, run_log=run_log)
         ruling_text = ruling_text.strip()
 
         print_ruling_and_grading(

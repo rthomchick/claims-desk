@@ -398,7 +398,7 @@ def test_log_file_created_with_header_before_any_agent_turn(monkeypatch, tmp_pat
     monkeypatch.setattr(
         launch_review,
         "fetch_output_artifact",
-        lambda client, session_id, run_log=None: "the ruling",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
     )
 
     run_review("acme-widget-performance-01", "memory_on")
@@ -441,11 +441,13 @@ def test_partial_log_survives_mid_run_exception(monkeypatch, tmp_path):
 
 
 def test_multi_file_files_list_logs_all_files_not_just_first(tmp_path):
+    """Multiple unrelated files present, only one matches the expected
+    filename — that one is selected and logged, regardless of position."""
     run_log = RunLog(tmp_path / "test.log")
     client = MagicMock()
     files = [
         SimpleNamespace(id="file_first", filename="ruling_a.md", size_bytes=100, created_at="t1"),
-        SimpleNamespace(id="file_second", filename="ruling_b.md", size_bytes=200, created_at="t2"),
+        SimpleNamespace(id="file_second", filename="acme-widget-performance-01.md", size_bytes=200, created_at="t2"),
         SimpleNamespace(id="file_third", filename="ruling_c.md", size_bytes=300, created_at="t3"),
     ]
     client.beta.files.list.return_value = files
@@ -453,7 +455,7 @@ def test_multi_file_files_list_logs_all_files_not_just_first(tmp_path):
     download_response.read.return_value = b"ruling content"
     client.beta.files.download.return_value = download_response
 
-    fetch_output_artifact(client, "sess_xyz789", run_log=run_log)
+    fetch_output_artifact(client, "sess_xyz789", "acme-widget-performance-01", run_log=run_log)
     run_log.close()
 
     content = (tmp_path / "test.log").read_text()
@@ -461,11 +463,115 @@ def test_multi_file_files_list_logs_all_files_not_just_first(tmp_path):
     assert "file_second" in content
     assert "file_third" in content
     assert "ruling_a.md" in content
-    assert "ruling_b.md" in content
+    assert "acme-widget-performance-01.md" in content
     assert "ruling_c.md" in content
-    assert "[0]" in content and "SELECTED" in content
-    # only the first is selected (f17, unchanged)
-    client.beta.files.download.assert_called_once_with("file_first", betas=[launch_review.FILES_BETA])
+    assert "[1]" in content and "SELECTED" in content
+    client.beta.files.download.assert_called_once_with("file_second", betas=[launch_review.FILES_BETA])
+
+
+# --- d17: filename-based selection, not index (fixes f17) ---
+
+
+def test_exactly_one_matching_file_selected_no_raise(tmp_path):
+    run_log = RunLog(tmp_path / "test.log")
+    client = MagicMock()
+    files = [
+        SimpleNamespace(id="file_a", filename="acme-widget-performance-01.md", size_bytes=100, created_at="t1"),
+    ]
+    client.beta.files.list.return_value = files
+    download_response = MagicMock()
+    download_response.read.return_value = b"ruling content"
+    client.beta.files.download.return_value = download_response
+
+    result = fetch_output_artifact(client, "sess_xyz789", "acme-widget-performance-01", run_log=run_log)
+    run_log.close()
+
+    assert result == "ruling content"
+    client.beta.files.download.assert_called_once_with("file_a", betas=[launch_review.FILES_BETA])
+
+
+def test_zero_matching_files_retries_then_raises_naming_expected_and_found(tmp_path):
+    run_log = RunLog(tmp_path / "test.log")
+    client = MagicMock()
+    files = [
+        SimpleNamespace(id="file_a", filename="other-claim-01.md", size_bytes=100, created_at="t1"),
+    ]
+    client.beta.files.list.return_value = files
+
+    with pytest.raises(RuntimeError) as excinfo:
+        fetch_output_artifact(client, "sess_xyz789", "acme-widget-performance-01", run_log=run_log)
+    run_log.close()
+
+    assert "acme-widget-performance-01.md" in str(excinfo.value)
+    assert "other-claim-01.md" in str(excinfo.value)
+    assert client.beta.files.list.call_count == 3
+    client.beta.files.download.assert_not_called()
+
+
+def test_two_matching_files_raises_immediately_no_retry(tmp_path):
+    run_log = RunLog(tmp_path / "test.log")
+    client = MagicMock()
+    files = [
+        SimpleNamespace(id="file_a", filename="acme-widget-performance-01.md", size_bytes=100, created_at="t1"),
+        SimpleNamespace(id="file_b", filename="acme-widget-performance-01.md", size_bytes=100, created_at="t2"),
+    ]
+    client.beta.files.list.return_value = files
+
+    with pytest.raises(RuntimeError, match="Multiple output files matched"):
+        fetch_output_artifact(client, "sess_xyz789", "acme-widget-performance-01", run_log=run_log)
+    run_log.close()
+
+    assert client.beta.files.list.call_count == 1
+    client.beta.files.download.assert_not_called()
+
+
+def test_matching_file_plus_unexpected_file_selects_match_and_logs_anomaly(tmp_path):
+    run_log = RunLog(tmp_path / "test.log")
+    client = MagicMock()
+    files = [
+        SimpleNamespace(id="file_a", filename="acme-widget-performance-01.md", size_bytes=100, created_at="t1"),
+        SimpleNamespace(id="file_b", filename="stray-leftover.md", size_bytes=50, created_at="t2"),
+    ]
+    client.beta.files.list.return_value = files
+    download_response = MagicMock()
+    download_response.read.return_value = b"ruling content"
+    client.beta.files.download.return_value = download_response
+
+    fetch_output_artifact(client, "sess_xyz789", "acme-widget-performance-01", run_log=run_log)
+    run_log.close()
+
+    content = (tmp_path / "test.log").read_text()
+    client.beta.files.download.assert_called_once_with("file_a", betas=[launch_review.FILES_BETA])
+    assert "UNEXPECTED ARTIFACT" in content
+    assert "stray-leftover.md" in content
+    assert "file_b" in content
+
+
+def test_f18_case_two_files_selects_01_logs_02_as_unexpected(tmp_path):
+    """The exact f18 scenario: kalder_govern-compliance-01.md and -02.md
+    both present in the session's outputs. Invoked for -01, must select
+    -01.md and log -02.md as a named anomaly — never take index 0
+    unconditionally."""
+    run_log = RunLog(tmp_path / "test.log")
+    client = MagicMock()
+    files = [
+        SimpleNamespace(id="file_00", filename="kalder_govern-compliance-02.md", size_bytes=100, created_at="t1"),
+        SimpleNamespace(id="file_01", filename="kalder_govern-compliance-01.md", size_bytes=120, created_at="t2"),
+    ]
+    client.beta.files.list.return_value = files
+    download_response = MagicMock()
+    download_response.read.return_value = b"ruling for -01"
+    client.beta.files.download.return_value = download_response
+
+    result = fetch_output_artifact(client, "sess_xyz789", "kalder_govern-compliance-01", run_log=run_log)
+    run_log.close()
+
+    assert result == "ruling for -01"
+    client.beta.files.download.assert_called_once_with("file_01", betas=[launch_review.FILES_BETA])
+    content = (tmp_path / "test.log").read_text()
+    assert "UNEXPECTED ARTIFACT" in content
+    assert "kalder_govern-compliance-02.md" in content
+    assert "file_00" in content
 
 
 def test_tool_call_arguments_appear_in_log(monkeypatch, tmp_path):
@@ -485,7 +591,7 @@ def test_tool_call_arguments_appear_in_log(monkeypatch, tmp_path):
     monkeypatch.setattr(
         launch_review,
         "fetch_output_artifact",
-        lambda client, session_id, run_log=None: "the ruling",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
     )
 
     run_review("acme-widget-performance-01", "memory_on")
@@ -512,7 +618,7 @@ def test_agent_conversational_message_logged(monkeypatch, tmp_path):
     monkeypatch.setattr(
         launch_review,
         "fetch_output_artifact",
-        lambda client, session_id, run_log=None: "the ruling",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
     )
 
     run_review("acme-widget-performance-01", "memory_on")
