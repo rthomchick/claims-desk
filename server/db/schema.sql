@@ -47,3 +47,19 @@ create table review_rulings (
 
 create view active_claims as
 select * from claims where record_status = 'active';
+
+create table platform_lifecycle (
+    platform text not null,              -- e.g. 'Red Hat Enterprise Linux'
+    major_version text not null,         -- '8', '9', '10'
+    standard_support_end date,           -- end of the last phase included
+                                          -- in a standard subscription
+    phase_name text,                     -- the phase that date belongs to,
+                                          -- recorded so the threshold is
+                                          -- auditable rather than a bare date
+    source_url text not null,
+    retrieved_at timestamptz not null,
+    primary key (platform, major_version)
+);
+
+comment on table platform_lifecycle is
+    'Populated once, Week 19. No refresh mechanism exists. Rows are accurate as of retrieved_at and go stale silently. Any consumer must treat retrieved_at as a currency bound on its own conclusion.';
