@@ -20,9 +20,21 @@ create table evidence_links (
     sample_size integer,                 -- nullable; only populated for performance/comparative claims
     baseline text,                       -- nullable; comparison basis or baseline named
     expiry_date date,                    -- nullable; populated for compliance/superlative claims
-    scope text,                          -- nullable; platform versions, component revisions, configurations covered
+    scope text,                          -- nullable; configuration/support-tier detail that doesn't decompose into columns. Version/revision facts do NOT go here.
+    platform text,                       -- nullable; compatibility claims only. Certified platform/OS name, e.g. 'Red Hat Enterprise Linux'.
+    platform_version text,               -- nullable; compatibility claims only. Certified version range, e.g. '9.0-9.x'. Deterministic checks read this, not scope.
+    component_revision text,             -- nullable; compatibility claims only. SKU, firmware, or driver revision covered. Deterministic checks read this, not scope.
     created_at timestamptz not null default now()
 );
+
+comment on column evidence_links.scope is
+    'Configuration and support-tier detail that does not decompose into columns. Does NOT carry version/revision facts once platform/platform_version/component_revision are populated.';
+comment on column evidence_links.platform is
+    'Compatibility claims: certified platform/OS name, e.g. ''Red Hat Enterprise Linux''. Version and revision facts live here and in platform_version/component_revision, not in scope.';
+comment on column evidence_links.platform_version is
+    'Compatibility claims: certified version range, e.g. ''9.0-9.x''. Deterministic checks read this field, not scope.';
+comment on column evidence_links.component_revision is
+    'Compatibility claims: SKU, firmware, or driver revision covered. Deterministic checks read this field, not scope.';
 
 create table review_rulings (
     ruling_id uuid primary key default gen_random_uuid(),
