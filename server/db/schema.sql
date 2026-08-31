@@ -20,6 +20,7 @@ create table evidence_links (
     sample_size integer,                 -- nullable; only populated for performance/comparative claims
     baseline text,                       -- nullable; comparison basis or baseline named
     expiry_date date,                    -- nullable; populated for compliance/superlative claims
+    scope text,                          -- nullable; platform versions, component revisions, configurations covered
     created_at timestamptz not null default now()
 );
 

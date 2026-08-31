@@ -64,7 +64,7 @@ def check_substantiation(claim_id: str) -> dict:
 
     evidence = fetchall_dict(
         """
-        select evidence_id, evidence_url, evidence_date, sample_size, baseline, expiry_date
+        select evidence_id, evidence_url, evidence_date, sample_size, baseline, expiry_date, scope
         from evidence_links
         where claim_id = %s
         order by created_at asc
