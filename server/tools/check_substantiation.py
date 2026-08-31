@@ -40,13 +40,61 @@ EVIDENCE_STANDARDS = {
         '(e.g. "#1 selling") require continuous re-substantiation for the '
         "duration the claim is made, not just at time of first publication."
     ),
+    "compatibility": (
+        "Certification record link present, platform named, platform version "
+        "named distinctly from the platform itself, certified component "
+        "revision named, platform version has not passed the last lifecycle "
+        "phase included in a standard support subscription (phases available "
+        "only as a separately purchased add-on, such as Red Hat ELS or "
+        "Microsoft ESU, count as expired for claim purposes)."
+    ),
 }
 
 # Claim types for which sample_size is not an applicable field.
-_SAMPLE_SIZE_NOT_APPLICABLE = {"compliance", "superlative"}
+_SAMPLE_SIZE_NOT_APPLICABLE = {"compliance", "superlative", "compatibility"}
 
 # Claim types for which expiry_date is not an applicable field.
-_EXPIRY_NOT_APPLICABLE = {"performance", "comparative"}
+_EXPIRY_NOT_APPLICABLE = {"performance", "comparative", "compatibility"}
+
+
+def _major_version(platform_version: str | None) -> str | None:
+    """Extract a bare major version ('9') from a certified version range
+    ('9.0-9.x') for lookup against platform_lifecycle.major_version, which
+    is keyed on major version only. No documented format contract exists
+    for platform_version beyond the 'certified version range' example in
+    the migration comment, so this takes the leading run of digits before
+    the first non-digit character."""
+    if not platform_version:
+        return None
+    digits = ""
+    for ch in platform_version:
+        if ch.isdigit():
+            digits += ch
+        else:
+            break
+    return digits or None
+
+
+def _platform_lifecycle_status(platform: str | None, platform_version: str | None) -> str:
+    if not platform or not platform_version:
+        return "unknown"
+
+    major_version = _major_version(platform_version)
+    if major_version is None:
+        return "unknown"
+
+    row = fetchone_dict(
+        """
+        select standard_support_end
+        from platform_lifecycle
+        where platform = %s and major_version = %s
+        """,
+        (platform, major_version),
+    )
+    if row is None or row.get("standard_support_end") is None:
+        return "unknown"
+
+    return "expired" if row["standard_support_end"] < date.today() else "current"
 
 
 def check_substantiation(claim_id: str) -> dict:
@@ -62,6 +110,10 @@ def check_substantiation(claim_id: str) -> dict:
     if claim is None:
         return {"error": f"no claim found with claim_id {claim_id}"}
 
+    claim_type = claim["claim_type"]
+    if claim_type not in EVIDENCE_STANDARDS:
+        return {"error": f"unrecognized claim_type: {claim_type}"}
+
     evidence = fetchall_dict(
         """
         select evidence_id, evidence_url, evidence_date, sample_size, baseline, expiry_date,
@@ -73,7 +125,6 @@ def check_substantiation(claim_id: str) -> dict:
         (claim_id,),
     )
 
-    claim_type = claim["claim_type"]
     primary_evidence = evidence[0] if evidence else None
 
     has_evidence_link = bool(primary_evidence and primary_evidence.get("evidence_url"))
@@ -92,6 +143,14 @@ def check_substantiation(claim_id: str) -> dict:
             primary_evidence and primary_evidence.get("sample_size") is not None
         )
 
+    if claim_type == "compatibility":
+        platform_lifecycle_status = _platform_lifecycle_status(
+            primary_evidence.get("platform") if primary_evidence else None,
+            primary_evidence.get("platform_version") if primary_evidence else None,
+        )
+    else:
+        platform_lifecycle_status = None
+
     return {
         "claim": claim,
         "evidence": evidence,
@@ -101,5 +160,6 @@ def check_substantiation(claim_id: str) -> dict:
             "has_evidence_date": has_evidence_date,
             "is_expired": is_expired,
             "has_sample_size": has_sample_size,
+            "platform_lifecycle_status": platform_lifecycle_status,
         },
     }

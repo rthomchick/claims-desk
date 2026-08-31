@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import date
 
 from server.db.client import fetchone_dict, fetchall_dict, execute
+from server.tools.check_substantiation import _platform_lifecycle_status
 import json
 
 RISK_CLASSES = ("low", "medium", "high", "prohibited")
@@ -115,25 +116,67 @@ def _classify_superlative(claim: dict, evidence: dict | None) -> tuple[str, list
     return risk, factors
 
 
+def _classify_compatibility(claim: dict, evidence: dict | None) -> tuple[str, list[str]]:
+    factors: list[str] = []
+    # Floor at medium per the Decision 4 addendum: falsity here is
+    # operational (unsupported production system), not just reputational.
+    risk = "medium"
+
+    if evidence is None or not evidence.get("evidence_url"):
+        factors.append("no certification record link")
+        risk = _worse(risk, "prohibited")
+
+    if evidence is None or not evidence.get("platform_version"):
+        factors.append("platform version not named")
+        risk = _worse(risk, "high")
+
+    lifecycle_status = evidence.get("platform_lifecycle_status") if evidence else None
+    if lifecycle_status == "expired":
+        factors.append("platform version past standard support lifecycle threshold")
+        risk = _worse(risk, "high")
+
+    # Crude heuristic: substring match on claim_text, not language
+    # understanding. Flagged here per the instruction that this detection
+    # method must be visible in risk_factors, not buried.
+    claim_text = (claim.get("claim_text") or "").lower()
+    if "supported on" in claim_text:
+        factors.append(
+            "support-tier language (\"supported on\") detected via substring "
+            "match on claim_text — a crude heuristic, not language understanding"
+        )
+        risk = _worse(risk, "high")
+
+    if not factors:
+        factors.append("certification record, platform version, and current lifecycle status all present")
+
+    return risk, factors
+
+
 _RULESETS = {
     "performance": _classify_performance,
     "comparative": _classify_comparative,
     "compliance": _classify_compliance,
     "superlative": _classify_superlative,
+    "compatibility": _classify_compatibility,
 }
 
 
 def classify_claim_risk(claim_id: str) -> dict:
     claim = fetchone_dict(
-        "select claim_id, claim_type from claims where claim_id = %s",
+        "select claim_id, claim_type, claim_text from claims where claim_id = %s",
         (claim_id,),
     )
     if claim is None:
         return {"error": f"no claim found with claim_id {claim_id}"}
 
+    claim_type = claim["claim_type"]
+    if claim_type not in _RULESETS:
+        return {"error": f"unrecognized claim_type: {claim_type}"}
+
     evidence_rows = fetchall_dict(
         """
-        select evidence_url, evidence_date, sample_size, baseline, expiry_date
+        select evidence_url, evidence_date, sample_size, baseline, expiry_date,
+               platform, platform_version, component_revision
         from evidence_links
         where claim_id = %s
         order by created_at asc
@@ -143,7 +186,12 @@ def classify_claim_risk(claim_id: str) -> dict:
     )
     evidence = evidence_rows[0] if evidence_rows else None
 
-    ruleset = _RULESETS[claim["claim_type"]]
+    if claim_type == "compatibility" and evidence is not None:
+        evidence["platform_lifecycle_status"] = _platform_lifecycle_status(
+            evidence.get("platform"), evidence.get("platform_version")
+        )
+
+    ruleset = _RULESETS[claim_type]
     risk_class, risk_factors = ruleset(claim, evidence)
 
     execute(
