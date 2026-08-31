@@ -4,7 +4,7 @@ description: Conduct a marketing claim review for the Claims Desk — determine 
 license: Proprietary
 metadata:
   author: richardthomchick
-  version: "1.0"
+  version: "1.1"
   project: claims-desk
 ---
 
@@ -22,13 +22,13 @@ This skill does not cover: adding a new claim to the registry (use `append_claim
 
 1. **Retrieve the claim.** Call `get_claim_status` to see the claim's current state, type, and any prior ruling. If a ruling already exists, treat it as context, not as binding — evidence and expiry status can change.
 
-2. **Pull the substantiation material.** Call `check_substantiation`. This returns the claim, its linked evidence, the evidence standard for its claim type, and a set of deterministic hygiene checks (evidence link present, expiry status, sample size present, etc.). **This tool does not render a verdict — that judgment is yours.** Do not treat the absence of a verdict field as an oversight; it's deliberate. See `references/evidence-standards.md` for what "sufficient" means per claim type.
+2. **Pull the substantiation material.** Call `check_substantiation`. This returns the claim, its linked evidence, the evidence standard for its claim type, and a set of deterministic hygiene checks (evidence link present, expiry status, sample size present, platform lifecycle status, etc.). **This tool does not render a verdict — that judgment is yours.** Do not treat the absence of a verdict field as an oversight; it's deliberate. See `references/evidence-standards.md` for what "sufficient" means per claim type.
 
 3. **Check the deterministic layer first.** The hygiene checks from `check_substantiation` are facts, not opinions — if `is_expired: true`, the claim fails regardless of anything else about it. If `has_evidence_link: false`, there is nothing to evaluate yet. Handle these before spending judgment on anything softer. A claim can fail on hygiene alone; don't reach for nuanced reasoning about evidence quality if the evidence doesn't exist at all.
 
 4. **Apply the claim-strength check.** Read the claim's exact wording, not just its category. A claim phrased with an explicit support level ("tests show," "proven to," "studies confirm") carries a higher evidentiary bar than the same underlying fact phrased more softly ("up to X%," "typical results may vary"). This is judgment, not a lookup — weigh the claim's own language against what the evidence actually supports. See `references/evidence-standards.md` for the reasoning behind this and worked examples per claim type.
 
-5. **Judge sufficiency against the claim type's evidence standard.** Each of the four claim types (Performance, Comparative, Compliance, Superlative) has a distinct standard — see `references/claim-type-taxonomy.md`, maintained by the companion reference skill. Don't apply one type's standard to another; a Superlative claim's evidence bar is not the same shape as a Performance claim's.
+5. **Judge sufficiency against the claim type's evidence standard.** Each of the five claim types (Performance, Comparative, Compliance, Superlative, Compatibility) has a distinct standard — see the `claim-taxonomy` skill's `references/evidence-standards-by-type.md`. Don't apply one type's standard to another; a Superlative claim's evidence bar is not the same shape as a Performance claim's.
 
 6. **Decide: approve, reject, or escalate.** Approve only when the deterministic checks pass and the judgment layer supports the claim as worded. Reject when either layer clearly fails. **Escalate rather than rule when the call is genuinely close** — see "When to escalate" below. Do not force a binary decision on a claim that's legitimately ambiguous; a wrong confident ruling is worse than an honest escalation.
 

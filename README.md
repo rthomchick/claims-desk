@@ -65,9 +65,9 @@ Per ADR-016 Decision 1:
   `is_expired`, `has_sample_size`). No rendered verdict — that's the
   calling agent's job, guided by the `claim-review` and `claim-taxonomy`
   Skills (see "Skills" below).
-- `classify_claim_risk` — four type-specific rulesets (performance,
-  comparative, compliance, superlative), each a separate function in
-  `server/tools/classify_claim_risk.py`. Returns `risk_class` plus
+- `classify_claim_risk` — five type-specific rulesets (performance,
+  comparative, compliance, superlative, compatibility), each a separate
+  function in `server/tools/classify_claim_risk.py`. Returns `risk_class` plus
   `risk_factors` (the specific inputs that drove the classification, not
   just the label). Writes the result back to the `claims` row.
 
@@ -75,7 +75,8 @@ Per ADR-016 Decision 1:
 
 - Schema applied to a live Supabase project via the pooler connection
 - All 12 seed claims inserted; confirmed 3-3-3-3 distribution across the
-  four claim types
+  four claim types that existed as of Day 3 (a fifth, Compatibility, was
+  added later — see ADR-016 Decision 4 addendum)
 - Claims #9 (`kalder_vendor`, fabricated FedRAMP) and #11 (`kalder_insight`,
   no named source) confirmed to have zero `evidence_links` rows
 - `classify_claim_risk` run against all 12 live rows — claims #9 and #11
@@ -121,9 +122,10 @@ Day 5 verification below for why both copies exist):
 - `claim-review` — **procedural** skill: how to conduct a claim review
   (retrieve → substantiate → hygiene check first → claim-strength check →
   judge sufficiency → approve/reject/escalate → record ruling)
-- `claim-taxonomy` — **reference** skill: the four claim types (Performance,
-  Comparative, Compliance, Superlative) and their evidence standards,
-  split into deterministic (hygiene-checked) and judgment fields per type
+- `claim-taxonomy` — **reference** skill: the five claim types (Performance,
+  Comparative, Compliance, Superlative, Compatibility) and their evidence
+  standards, split into deterministic (hygiene-checked) and judgment
+  fields per type
 
 ## Day 5 verification (Agent Skills, progressive disclosure)
 

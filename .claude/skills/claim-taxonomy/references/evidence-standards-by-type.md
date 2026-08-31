@@ -26,7 +26,15 @@ This is the claim type where the deterministic layer carries nearly the entire v
 
 **Deterministic**: source link present, source date present, category field populated.
 
-**Judgment**: Is the source credible (a recognized third-party ranking/review platform vs. an unverifiable or self-published claim)? Is the category specific enough that the claim isn't misleading (e.g., "#1 in mid-market B2B SaaS for companies under 200 employees" being presented simply as "#1 rated")? Is the ranking still current, given how quickly rankings on most platforms change — this is the type with the shortest default currency window of the four, per FTC guidance that "#1" and ranking claims require continuous re-substantiation for as long as the claim is made.
+**Judgment**: Is the source credible (a recognized third-party ranking/review platform vs. an unverifiable or self-published claim)? Is the category specific enough that the claim isn't misleading (e.g., "#1 in mid-market B2B SaaS for companies under 200 employees" being presented simply as "#1 rated")? Is the ranking still current, given how quickly rankings on most platforms change — this is the type with the shortest default currency window of the five, per FTC guidance that "#1" and ranking claims require continuous re-substantiation for as long as the claim is made.
+
+## Compatibility
+
+**Deterministic**: certification record link present, platform named, platform version named distinctly from the platform itself, certified component revision named, platform version has not passed the last lifecycle phase included in a standard support subscription (phases available only as a separately purchased add-on, such as Red Hat ELS or Microsoft ESU, count as expired for claim purposes).
+
+**Judgment**: the scope question, asked four ways. Version scope — does the certification cover the specific platform version the claim names, including where a claim points to a separate resource rather than naming a version directly (a pointer to the certifying party's own record is strong mitigation; a pointer to a claimant-published resource is weak mitigation; no pointer is no mitigation). Component scope — does the certification cover the specific product component or revision the claim is made about. Configuration scope — does the certification cover the tested configuration, or does the claim generalize beyond it. Support-tier implication — does the claim's language ("certified for" vs. "supported on") match what the certification actually establishes, since "supported on" implies an ongoing vendor support relationship that certification alone does not.
+
+Compatibility's currency check is exogenous: unlike every other type, a Compatibility claim can go stale because the named platform reached end of life, with nothing about the claim, the evidence, or the claimant having changed.
 
 ## Why the deterministic/judgment split exists
 
@@ -34,4 +42,4 @@ Deterministic checks are things a computer can verify with certainty and no inte
 
 Judgment criteria require reading comprehension, contextual reasoning, or a sense of what a reasonable person would understand a claim to mean — these cannot be reduced to a boolean check without losing exactly the nuance that makes the judgment meaningful. These stay with the reviewing agent, guided by this reference and the `claim-review` skill's workflow.
 
-No claim type is entirely one or the other. Compliance leans heavily deterministic; Performance and Comparative lean more toward judgment; Superlative sits in between, with the underlying facts (source, date, category) deterministic but the interpretation (credibility, specificity, staleness) requiring judgment.
+No claim type is entirely one or the other. Compliance leans heavily deterministic; Performance and Comparative lean more toward judgment; Superlative sits in between, with the underlying facts (source, date, category) deterministic but the interpretation (credibility, specificity, staleness) requiring judgment. Compatibility leans furthest toward judgment, and differs from Performance and Comparative in shape as well as degree: their judgment spreads across several independent questions, while Compatibility's concentrates in one question asked four ways.
