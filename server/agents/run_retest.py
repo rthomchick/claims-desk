@@ -328,12 +328,15 @@ def plan_resume(sequence: list[Step], resume_state: ResumeState, force: bool) ->
     skipping one would risk leaving stale entries in front of a resumed
     memory_on run.
 
-    A resumed run landing mid-chain is a problem: if resume would start
-    at a memory-on claim 2 whose claim 1 is already recorded (but the
-    memory_on claim 1 run is NOT in the completed set — i.e. claim 1 for
-    this pair/repetition/variant hasn't actually run yet in this resume,
-    only claim 2 would be attempted next), the store state may not match
-    what the chain expects. That is reported and requires --force.
+    A resumed run landing mid-chain is a problem only for memory_on:
+    if resume would start at a memory-on claim 2 whose claim 1 is
+    already recorded, the Memory store state may not match what the
+    chain expects (was it cleared and re-populated by claim 1 in this
+    resume, or is it carrying over from a run before the failure?).
+    That is reported and requires --force. memory_off runs have no
+    Memory resource at all, so this reasoning does not apply to them —
+    a memory_off claim 2 landed mid-chain is not a problem and must
+    proceed without --force.
     """
     planned: list[PlannedStep] = []
     for step in sequence:
@@ -352,7 +355,7 @@ def plan_resume(sequence: list[Step], resume_state: ResumeState, force: bool) ->
             )
             continue
 
-        if step.claim_position == 2:
+        if step.variant == "memory_on" and step.claim_position == 2:
             claim_1_key = None
             for other in sequence:
                 if (

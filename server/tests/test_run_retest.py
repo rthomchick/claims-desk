@@ -295,6 +295,39 @@ def test_plan_resume_mid_chain_with_force_proceeds():
     assert "force" in claim_2_planned.skip_reason.lower()
 
 
+def test_plan_resume_mid_chain_memory_off_proceeds_without_force():
+    """The mid-chain guard exists because memory_on claim 2 depends on
+    Memory store state that a resume might not reproduce. memory_off has
+    no Memory resource at all, so a memory_off claim 2 landed mid-chain
+    (its claim 1 already recorded) is not the problem the guard exists
+    for and must proceed without --force."""
+    sequence = build_sequence()
+    claim_1_memory_off = next(
+        s
+        for s in sequence
+        if isinstance(s, RunSpec)
+        and s.variant == "memory_off"
+        and s.pair_label == "A"
+        and s.repetition == 1
+        and s.claim_position == 1
+    )
+    resume_state = ResumeState(completed={run_key(claim_1_memory_off)})
+
+    planned = plan_resume(sequence, resume_state, force=False)
+
+    claim_2_planned = next(
+        p
+        for p in planned
+        if isinstance(p.step, RunSpec)
+        and p.step.variant == "memory_off"
+        and p.step.pair_label == "A"
+        and p.step.repetition == 1
+        and p.step.claim_position == 2
+    )
+    assert claim_2_planned.skip is False
+    assert claim_2_planned.skip_reason == ""
+
+
 def test_plan_resume_full_pair_completed_all_skipped():
     sequence = build_sequence()
     runs = [s for s in sequence if isinstance(s, RunSpec)]
