@@ -9,7 +9,8 @@ create table claims (
     risk_class text check (risk_class in ('low', 'medium', 'high', 'prohibited')),
     risk_factors jsonb,                  -- structured factors driving the risk_class, not just the label
     created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now()
+    updated_at timestamptz not null default now(),
+    written_by_session text              -- nullable; Managed Agents session.id, see column comment below
 );
 
 create table evidence_links (
@@ -24,9 +25,14 @@ create table evidence_links (
     platform text,                       -- nullable; compatibility claims only. Certified platform/OS name, e.g. 'Red Hat Enterprise Linux'.
     platform_version text,               -- nullable; compatibility claims only. Certified version range, e.g. '9.0-9.x'. Deterministic checks read this, not scope.
     component_revision text,             -- nullable; compatibility claims only. SKU, firmware, or driver revision covered. Deterministic checks read this, not scope.
-    created_at timestamptz not null default now()
+    created_at timestamptz not null default now(),
+    written_by_session text              -- nullable; Managed Agents session.id, see column comment below
 );
 
+comment on column claims.written_by_session is
+    'Managed Agents session.id of the session that wrote this row, when written by an agent session. Null for rows written by hand, by seed scripts, or before this column existed. Closes the attribution half of Week 18''s f16.';
+comment on column evidence_links.written_by_session is
+    'Managed Agents session.id of the session that wrote this row, when written by an agent session. Null for rows written by hand, by seed scripts, or before this column existed. Closes the attribution half of Week 18''s f16.';
 comment on column evidence_links.scope is
     'Configuration and support-tier detail that does not decompose into columns. Does NOT carry version/revision facts once platform/platform_version/component_revision are populated.';
 comment on column evidence_links.platform is

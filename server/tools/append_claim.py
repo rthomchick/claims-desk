@@ -14,6 +14,7 @@ def append_claim(
     sample_size: int | None = None,
     baseline: str | None = None,
     expiry_date: str | None = None,
+    written_by_session: str | None = None,
 ) -> dict:
     conn = get_connection()
     try:
@@ -32,11 +33,11 @@ def append_claim(
 
             cur.execute(
                 """
-                insert into claims (product_key, claim_type, claim_text, claim_slug)
-                values (%s, %s, %s, %s)
+                insert into claims (product_key, claim_type, claim_text, claim_slug, written_by_session)
+                values (%s, %s, %s, %s, %s)
                 returning claim_id
                 """,
-                (product_key, claim_type, claim_text, claim_slug),
+                (product_key, claim_type, claim_text, claim_slug, written_by_session),
             )
             claim_id = cur.fetchone()[0]
 
@@ -48,10 +49,10 @@ def append_claim(
                 cur.execute(
                     """
                     insert into evidence_links
-                        (claim_id, evidence_url, evidence_date, sample_size, baseline, expiry_date)
-                    values (%s, %s, %s, %s, %s, %s)
+                        (claim_id, evidence_url, evidence_date, sample_size, baseline, expiry_date, written_by_session)
+                    values (%s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (claim_id, evidence_url, evidence_date, sample_size, baseline, expiry_date),
+                    (claim_id, evidence_url, evidence_date, sample_size, baseline, expiry_date, written_by_session),
                 )
         conn.commit()
         # Post-write verification: confirm the row persisted.
