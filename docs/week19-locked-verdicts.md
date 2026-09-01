@@ -24,19 +24,33 @@ Note for the ADR: software certification does *not* carry forward on the same te
 
 **R2 — The `compatibility` evidence standard.** Deterministic fields, the lifecycle threshold, and the four judgment questions (version scope, component scope, configuration scope, support-tier implication).
 
-Source: `compatibility-claim-type-draft.md`, sections 2 and 3, drafted 2026-08-29. Not yet committed to the skill trees or to ADR-016 at the time of this lock.
+Source: originated in `compatibility-claim-type-draft.md`, sections 2 and 3, drafted 2026-08-29. Landed at commit `7961733` in the `claim-taxonomy` skill's `references/evidence-standards-by-type.md` ("Compatibility" section, deterministic and judgment fields) and in `docs/ADR-016-decision-4-addendum-compatibility.md` ("Decision" and "The lifecycle threshold" sections). The draft file no longer exists; these are the committed sources.
 
 **R3 — Claim-strength gradient.** "Compatible with" is the softest tier, asserting interoperation rather than a certification program. "Certified for" asserts a record within a named program that must exist, be current, and cover the claimed scope. "Supported on" is strongest, asserting a support commitment, and requires both a current record and a platform version inside a support window the reader actually has.
 
-Source: `compatibility-claim-type-draft.md`, section 3.
+Source: originated in `compatibility-claim-type-draft.md`, section 3. Landed at commit `7961733` in the `claim-review` skill's `references/evidence-standards.md`, "Worked example: the Compatibility scope gradient."
 
 **R4 — Certifying-party classification rule.** If the certifying party is the platform vendor and the claim names a platform, the claim is Compatibility. The certifying party being a commercial counterparty rather than a neutral authority is why scope carries the whole judgment layer for this type.
 
-Source: `compatibility-claim-type-draft.md`, section 1.
+Source: originated in `compatibility-claim-type-draft.md`, section 1. Landed at commit `7961733` and in `docs/ADR-016-decision-4-addendum-compatibility.md`, "Why not Compliance" ("The certifying party differs in kind").
 
 **R5 — Verdict vocabulary.** `substantiated`, `partially`, `not_substantiated`, per the Week 18 ruling artifact format (d6) and rubric criterion 2.
 
 Source: Week 18 Chat log, Day 2. See "Known inconsistency" below.
+
+**R6 — Scoping by reference.** A claim may name no version while pointing to a separate resource that does.
+
+> A pointer never satisfies a deterministic check, because those run against the evidence record rather than the claim text. It functions as mitigation within version scope, weighted by the authority of what it resolves to:
+>
+> - Resolves to the **certifying party's own record**: strong mitigation, potentially sufficient to close a version-scope gap. The claim defers to the same authority it invokes.
+> - Resolves to a **resource published by the claimant**: weak mitigation. The reviewer should name it, and it supports a lower risk classification, but it does not cure the gap. A claimant pointing at its own document asserts its own support, not the third-party certification the claim invokes.
+> - **Absent, or unresolving**: no mitigation.
+>
+> Weight the pointer's proximity to the claim and whether the resource states scope in terms the claim can inherit. A pointer to a continuously updated resource names a place where versions are listed rather than a version, which is a further reason it mitigates rather than cures.
+
+Source: `docs/ADR-016-decision-4-addendum-compatibility.md`, "Scoping by reference."
+
+Pair A's reasoning was this rule's first application and predates its general statement — at the time the lock was written, `compatibility-claim-type-draft.md` did not address pointers at all, and the Pair A reasoning above reached the same result (proximate, resolving pointer to a claimant-published resource is real but insufficient mitigation) ahead of the rule being stated in general form. The six verdicts were re-derived against the committed R6 wording above; none moved.
 
 ---
 
@@ -154,12 +168,49 @@ The ruling artifact format and rubric criterion 2 accept only `substantiated`, `
 
 No locked verdict is `escalate`, so this does not block the lock. It remains live for the runs: an agent that reasons its way to escalation on any of these six claims produces a ruling that fails criterion 2 mechanically, fails grading, and yields no data point. Given that R2 describes this type's claims as close calls by construction, that is a realistic outcome rather than a theoretical one.
 
-Resolving it means widening criterion 2 and the d6 format to four values. That is a rubric change during a retest and needs recording as a decision with its reasoning, not landing as implementation detail.
+Resolving it means widening criterion 2 and the d6 format to four values. **Decided, not yet shipped:** decision d(w19)-4 (Week 19 chat log) widens criterion 2 and the d6 format to four values, adding `escalate`. That is a rubric change during a retest and is recorded here as a decision with its reasoning, per the paragraph above — implementation (the actual criterion-2 and d6-format widening) has not yet landed in the rubric or artifact format.
 
 ---
 
 ## Open items this lock depends on but does not settle
 
-- **Pointer-scoping has no home in the standard yet.** The Pair A reasoning treats a resolving pointer as mitigation that does not cure a version-scope gap. `compatibility-claim-type-draft.md` does not address pointers at all. The rule needs writing into the standard and into the ADR-016 Decision 4 addendum before either is committed, and the reasoning above is the first application of a rule that has not been stated in general form.
-- **The draft itself is uncommitted.** R2, R3, and R4 all cite a draft that has not landed in the skill trees or in ADR-016. These verdicts are locked against text that could still change. If it changes, this document is reopened rather than quietly reinterpreted.
-- **The lifecycle threshold is not exercised.** Every platform version named across the six claims is inside a standard-subscription support phase, so R2's threshold never fires. It is locked and stated but untested by this set.
+- **Pointer-scoping: CLOSED.** Now [R6](#rule-sources). The rule is committed in `docs/ADR-016-decision-4-addendum-compatibility.md`, "Scoping by reference," and quoted in full there. See the 2026-08-31 amendment below.
+- **Uncommitted draft: CLOSED.** R2, R3, and R4 now cite committed sources (commit `7961733`, plus the ADR-016 Decision 4 addendum). All six verdicts were re-derived against the committed wording; none moved. See the amendment below.
+- **The lifecycle threshold is not exercised, and this now stands confirmed against live data.** Every platform version named across the six claims is inside a standard-subscription support phase, so R2's threshold never fires. It is locked and stated but untested by this set. Confirmed against the live registry (`get_claim_status` on all six rows, 2026-08-31): every one of the six seeded claims returns `platform_lifecycle_status: current`. The threshold remains unexercised by construction of this claim set, not by omission.
+
+---
+
+## Amendment — 2026-08-31
+
+**What changed in the sources since the 2026-08-30 lock.** At lock time, R2, R3, and R4 cited `compatibility-claim-type-draft.md`, an uncommitted draft dated 2026-08-29, and pointer-scoping had no rule at all — the draft did not address it. Commit `7961733` (2026-08-31) landed the compatibility claim type into both skill trees: the `claim-taxonomy` skill's `references/evidence-standards-by-type.md` (deterministic fields and the four judgment questions) and the `claim-review` skill's `references/evidence-standards.md` (the claim-strength gradient worked example). `docs/ADR-016-decision-4-addendum-compatibility.md` (accepted 2026-08-30) committed the type definition, the certifying-party rule, the lifecycle threshold, and — in its "Scoping by reference" section — the pointer-scoping rule that did not exist in any committed form at lock time. The draft file `compatibility-claim-type-draft.md` no longer exists on disk; it was superseded by these committed sources rather than left in place alongside them.
+
+**Re-derivation result.** All six locked verdicts (Pair A: C7, C8 `not_substantiated`; Pair B: C3, C4 `substantiated`; Pair C: C10, C11 `not_substantiated`) were re-derived against the committed R2–R4 wording and the newly-committed R6. **None moved.** The Pair A reasoning's treatment of the Dell.com/OSsupport pointer — proximate, resolving, but pointing to the claimant's own matrix rather than to Red Hat's certification record, and therefore weak mitigation that does not cure the version-scope gap — matches R6's committed rule exactly: a pointer to "a resource published by the claimant" is "weak mitigation," named but not curing.
+
+**Scope of R6 across the three pairs.** Pairs B and C contain no scoping pointers, so R6 does not apply to them. Pair B's claims (C3, C4) name their RHEL versions directly in the claim text; there is no unversioned platform name for a pointer to rescue. Pair C's claims (C10, C11) name no version and no pointer — C10 and C11 both fail on component scope and certifying party (R4), axes R6 does not touch.
+
+**C4 and Pair A's pointer axis.** C4's claim text (`docs/week19-claim-text-verbatim.md`) carries a trailing pointer sentence: *"For a complete list of supported, certified and tested operating systems, plus additional details and links to relevant web sites, see the Operating System Interoperability Guide: `https://lenovopress.lenovo.com/osig#servers=sr650-v3-7d75-7d76-7d77`."* This is a pointer to a resource published by the claimant (Lenovo), the same structural shape as C7 and C8's Dell.com/OSsupport pointer — which makes Pair B structurally parallel to Pair A on the pointer axis. It does not change C4's verdict: C4 names its RHEL versions directly and in full in the claim text itself, so the pointer is redundant to an already-closed version-scope question rather than mitigation for an open one. R6 has nothing to cure in C4; the claim does not rely on the pointer the way C7/C8 do.
+
+---
+
+## Registry rows
+
+The six claims are seeded in the registry under `product_key = vendor_compat`, `claim_type = compatibility`. Mapping from candidate identifier (C1–C12, per `docs/week19-compatibility-claim-candidates-v2.md` Part 1) to registry row, confirmed against live `get_claim_status` reads, 2026-08-31:
+
+| Candidate | `claim_slug`                     | `claim_id`                             |
+| --------- | -------------------------------- | --------------------------------------- |
+| C7        | `vendor_compat-compatibility-01` | `7b38f6ae-a8ac-4d97-bc5e-85234a351825` |
+| C8        | `vendor_compat-compatibility-02` | `7f2057be-23cf-49a9-b43b-3466587ef390` |
+| C3        | `vendor_compat-compatibility-03` | `68cd4c6a-6dbb-4505-89b2-7dd6a866b189` |
+| C4        | `vendor_compat-compatibility-04` | `4bbede85-4cd6-4cf5-93bc-a14c3aee5068` |
+| C10       | `vendor_compat-compatibility-05` | `53543a68-7c38-4a06-8171-d0956a09b10e` |
+| C11       | `vendor_compat-compatibility-06` | `ff97218c-6b28-4a0a-b202-085a76bad1a7` |
+
+`claim_text` for all six rows is sourced from `docs/week19-claim-text-verbatim.md`, not from the descriptions given in the Pair A/B/C sections above. Those descriptions stay as they are — they describe the claims for this document's reasoning, they are not the claim text a retest session is given.
+
+---
+
+## Limits observed at seeding
+
+**C11 is the only one of the six carrying experimenter-written text inside its `claim_text`, and the only one whose evidence framing above rests on a comparator rather than a direct record.** Two pieces: a bracketed non-contiguity marker inside `claim_text` itself (`"[Non-contiguous on the source page. The following appears further down, in a separate \"Features\" subsection, after a call-to-action block and a duplicate re-render of the hero above.]"`), and the nearest-comparator framing in this document's own "Evidence record" line for C11 above (Red Hat catalog record #14, the SYS-221HE-TNRD, is the nearest comparator for a page that names no SKU — there is no record for CyberStore itself). No other claim among the six carries either.
+
+**Hygiene checks and risk classification are identical across all six.** Every row's `risk_factors` reads "certification record, platform version, and current lifecycle status all present," and every row is `risk_class: medium`. The deterministic layer does not differentiate this set at all — it passes uniformly. All measured variance in the six verdicts therefore runs through the judgment layer, concentrated in rubric criteria 3 (verdict matches evidence standard) and 8, not through any deterministic hygiene signal.
