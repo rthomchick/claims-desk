@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -33,7 +35,7 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv
 
-from server.db.client import fetchone_dict
+from server.db.client import execute, fetchone_dict
 
 load_dotenv()
 
@@ -476,6 +478,68 @@ def maybe_write_ruling_to_memory(
     return True
 
 
+VERDICT_PATTERN = re.compile(r"^## Verdict\s*\n(.+)$", re.MULTILINE)
+
+
+def parse_verdict(ruling_text: str) -> str | None:
+    """Extract the verdict line from the '## Verdict' section of a d6
+    ruling artifact (substantiated | partially | not_substantiated).
+
+    Returns None if the section isn't present in the expected shape —
+    callers must not fail the run over an unparseable verdict.
+    """
+    match = VERDICT_PATTERN.search(ruling_text)
+    return match.group(1).strip() if match else None
+
+
+def write_retest_session_row(
+    session_id: str,
+    agent_id: str,
+    claim_slug: str,
+    pair_label: str | None,
+    arm: str,
+    repetition: int,
+    verdict: str | None,
+    ruling_artifact: str,
+    grading_result: str | None,
+    grading_iterations: int | None,
+    criterion_scores: dict | None,
+    manipulation_check: str | None,
+    run_log_path: str,
+) -> None:
+    """Insert one row into retest_sessions (Week 19 item 7a).
+
+    Experiment infrastructure only — see the table comment in schema.sql.
+    Does not touch review_rulings. Called after the ruling has already
+    been printed, so a failure here cannot destroy a completed ruling
+    (f15's failure mode).
+    """
+    execute(
+        """
+        insert into retest_sessions (
+            session_id, agent_id, claim_slug, pair_label, arm, repetition,
+            verdict, ruling_artifact, grading_result, grading_iterations,
+            criterion_scores, manipulation_check, run_log_path
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            session_id,
+            agent_id,
+            claim_slug,
+            pair_label,
+            arm,
+            repetition,
+            verdict,
+            ruling_artifact,
+            grading_result,
+            grading_iterations,
+            json.dumps(criterion_scores) if criterion_scores is not None else None,
+            manipulation_check,
+            run_log_path,
+        ),
+    )
+
+
 def print_ruling_and_grading(
     ruling_text: str,
     outcome_result: str | None,
@@ -517,7 +581,13 @@ def get_memory_mount_path(session) -> str | None:
     return None
 
 
-def run_review(claim_slug: str, variant: str) -> dict:
+def run_review(
+    claim_slug: str,
+    variant: str,
+    pair_label: str | None = None,
+    repetition: int | None = None,
+    manipulation_check: str | None = None,
+) -> dict:
     run_log_path = make_run_log_path(claim_slug, variant)
     print(f"Run log: {run_log_path}")
     run_log = RunLog(run_log_path)
@@ -639,6 +709,29 @@ def run_review(claim_slug: str, variant: str) -> dict:
             ruling_text, outcome_result, outcome_explanation, last_iteration, run_log=run_log
         )
 
+        iteration_count = (last_iteration + 1) if last_iteration is not None else None
+        try:
+            write_retest_session_row(
+                session_id=session.id,
+                agent_id=agent_id,
+                claim_slug=claim_slug,
+                pair_label=pair_label,
+                arm=variant,
+                repetition=repetition,
+                verdict=parse_verdict(ruling_text),
+                ruling_artifact=ruling_text,
+                grading_result=outcome_result,
+                grading_iterations=iteration_count,
+                criterion_scores=None,
+                manipulation_check=manipulation_check,
+                run_log_path=str(run_log_path),
+            )
+            retest_row_reason = f"retest_sessions row written for session {session.id}."
+        except Exception as e:
+            retest_row_reason = f"retest_sessions row write failed: {e}"
+        print(retest_row_reason)
+        run_log.write(f"RETEST SESSION ROW: {retest_row_reason}")
+
         memory_write_performed = maybe_write_ruling_to_memory(
             client,
             variant,
@@ -653,7 +746,7 @@ def run_review(claim_slug: str, variant: str) -> dict:
             "ruling": ruling_text,
             "outcome_result": outcome_result,
             "outcome_explanation": outcome_explanation,
-            "iteration_count": (last_iteration + 1) if last_iteration is not None else None,
+            "iteration_count": iteration_count,
             "session_id": session.id,
             "memory_write_performed": memory_write_performed,
         }
@@ -673,10 +766,36 @@ def main() -> None:
         choices=["memory_on", "memory_off"],
         help="Memory configuration — no default, explicit choice required.",
     )
+    parser.add_argument(
+        "--pair-label",
+        default=None,
+        help="Retest harness pair label ('A', 'B', 'C'). Optional — only "
+        "meaningful for h1-r retest runs.",
+    )
+    parser.add_argument(
+        "--repetition",
+        type=int,
+        default=None,
+        help="Retest harness repetition number (1 or 2). Optional — only "
+        "meaningful for h1-r retest runs.",
+    )
+    parser.add_argument(
+        "--manipulation-check",
+        default=None,
+        choices=["priors_consulted", "no_priors", "void"],
+        help="Retest harness manipulation-check outcome. Optional — only "
+        "meaningful for h1-r retest runs.",
+    )
     args = parser.parse_args()
 
     try:
-        run_review(args.claim_slug, args.variant)
+        run_review(
+            args.claim_slug,
+            args.variant,
+            pair_label=args.pair_label,
+            repetition=args.repetition,
+            manipulation_check=args.manipulation_check,
+        )
     except ProhibitedToolCallError as e:
         print("=" * 70, file=sys.stderr)
         print("HARD FAILURE: prohibited tool call detected", file=sys.stderr)

@@ -69,3 +69,23 @@ create table platform_lifecycle (
 
 comment on table platform_lifecycle is
     'Populated once, Week 19. No refresh mechanism exists. Rows are accurate as of retrieved_at and go stale silently. Any consumer must treat retrieved_at as a currency bound on its own conclusion.';
+
+create table retest_sessions (
+    session_id text primary key,         -- Managed Agents session.id
+    agent_id text,
+    claim_slug text not null,
+    pair_label text,                     -- 'A', 'B', 'C'
+    arm text not null,                   -- 'memory_on' | 'memory_off'
+    repetition integer not null,         -- 1 or 2
+    verdict text,                        -- as written in the d6 artifact
+    ruling_artifact text,                -- the full d6 markdown
+    grading_result text,                 -- 'satisfied' etc.
+    grading_iterations integer,
+    criterion_scores jsonb,              -- per-criterion pass/fail
+    manipulation_check text,             -- 'priors_consulted' | 'no_priors' | 'void'
+    run_log_path text,                   -- the runs/ filename
+    created_at timestamptz not null default now()
+);
+
+comment on table retest_sessions is
+    'Week 19 h1-r retest session records. Experiment infrastructure, not part of the Claims Desk product surface. No MCP tool reads this table; it exists so per-criterion agreement can be scored by query rather than by parsing gitignored run logs. review_rulings remains the product''s ruling surface and is unaffected.';
