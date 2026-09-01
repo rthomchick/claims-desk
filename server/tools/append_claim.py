@@ -15,6 +15,10 @@ def append_claim(
     baseline: str | None = None,
     expiry_date: str | None = None,
     written_by_session: str | None = None,
+    scope: str | None = None,
+    platform: str | None = None,
+    platform_version: str | None = None,
+    component_revision: str | None = None,
 ) -> dict:
     conn = get_connection()
     try:
@@ -43,16 +47,39 @@ def append_claim(
 
             has_evidence = any(
                 v is not None
-                for v in (evidence_url, evidence_date, sample_size, baseline, expiry_date)
+                for v in (
+                    evidence_url,
+                    evidence_date,
+                    sample_size,
+                    baseline,
+                    expiry_date,
+                    scope,
+                    platform,
+                    platform_version,
+                    component_revision,
+                )
             )
             if has_evidence:
                 cur.execute(
                     """
                     insert into evidence_links
-                        (claim_id, evidence_url, evidence_date, sample_size, baseline, expiry_date, written_by_session)
-                    values (%s, %s, %s, %s, %s, %s, %s)
+                        (claim_id, evidence_url, evidence_date, sample_size, baseline, expiry_date,
+                         written_by_session, scope, platform, platform_version, component_revision)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (claim_id, evidence_url, evidence_date, sample_size, baseline, expiry_date, written_by_session),
+                    (
+                        claim_id,
+                        evidence_url,
+                        evidence_date,
+                        sample_size,
+                        baseline,
+                        expiry_date,
+                        written_by_session,
+                        scope,
+                        platform,
+                        platform_version,
+                        component_revision,
+                    ),
                 )
         conn.commit()
         # Post-write verification: confirm the row persisted.
