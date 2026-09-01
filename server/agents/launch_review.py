@@ -489,7 +489,7 @@ NO_PRIOR_RULING_PHRASE = "no prior ruling found"
 
 def parse_verdict(ruling_text: str) -> str | None:
     """Extract the verdict line from the '## Verdict' section of a d6
-    ruling artifact (substantiated | partially | not_substantiated).
+    ruling artifact (substantiated | partially | not_substantiated | escalate).
 
     Returns None if the section isn't present in the expected shape —
     callers must not fail the run over an unparseable verdict.

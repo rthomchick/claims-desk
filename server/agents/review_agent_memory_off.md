@@ -107,7 +107,7 @@ section headers, add sections, remove sections, or reorder them.
 # Ruling: {claim_slug}
 
 ## Verdict
-{substantiated | partially | not_substantiated}
+{substantiated | partially | not_substantiated | escalate}
 
 ## Evidence Cited
 - [{evidence_id}] {one-line description}

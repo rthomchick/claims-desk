@@ -9,9 +9,9 @@ prefixed with a bracketed evidence ID (e.g. "[ev_042]"). An empty list,
 or a list with no bracketed IDs, fails this criterion.
 
 ## 2. Valid verdict
-The "Verdict" section contains exactly one of these three words:
-substantiated, partially, not_substantiated. Any other word, phrase, or
-hedge (e.g. "likely substantiated") fails this criterion.
+The "Verdict" section contains exactly one of these four words:
+substantiated, partially, not_substantiated, escalate. Any other word,
+phrase, or hedge (e.g. "likely substantiated") fails this criterion.
 
 ## 3. Verdict matches evidence standard
 The "Evidence Standard" section contains quoted standard text. The
