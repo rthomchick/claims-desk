@@ -73,8 +73,12 @@ step in the pipeline captures a per-criterion score anywhere.
 
 ## Consequence
 
-Per-criterion agreement — the outcome measure pre-committed in
-commitment 1 — cannot be computed from `retest_sessions`. The
-per-criterion detail exists only as grader prose inside the
-`outcome_explanation` text embedded in the run logs under `runs/`, which
-is gitignored.
+Per-criterion agreement (commitment 1), the exclusion accounting
+(commitment 4), and the wrong-standard-propagation check (commitment 15)
+all require a per-criterion score per ruling. None of that can be
+computed from `criterion_scores` as instructed.
+
+The only path to a nine-criteria breakdown from the data that exists is
+parsing grader feedback out of the run logs (`runs/`, gitignored). The
+task instructions designate that explicitly as a different task, not a
+fallback to take here. No such parsing was performed.
