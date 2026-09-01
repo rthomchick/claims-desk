@@ -948,6 +948,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.variant == "memory_on" and args.claim_position is None:
+        parser.error("--claim-position is required when --variant is memory_on")
+
     try:
         run_review(
             args.claim_slug,
