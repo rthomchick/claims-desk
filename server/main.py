@@ -49,8 +49,21 @@ def append_claim(
     sample_size: int | None = None,
     baseline: str | None = None,
     expiry_date: str | None = None,
+    scope: str | None = None,
+    platform: str | None = None,
+    platform_version: str | None = None,
+    component_revision: str | None = None,
+    written_by_session: str | None = None,
 ) -> dict:
-    """Add a claim to the registry, with optional evidence. Returns the new claim_id."""
+    """Add a claim to the registry, with optional evidence. Returns the new claim_id.
+
+    scope: the boundary the evidence covers (e.g. a specific config, region, or workload).
+    platform: the platform named in a compatibility claim.
+    platform_version: the platform version as the vendor publishes it. Stored
+        verbatim and not normalized — do not reformat it.
+    component_revision: the certified component revision for a compatibility claim.
+    written_by_session: identifier of the session/agent writing this claim.
+    """
     return _append_claim(
         product_key=product_key,
         claim_type=claim_type,
@@ -60,6 +73,11 @@ def append_claim(
         sample_size=sample_size,
         baseline=baseline,
         expiry_date=expiry_date,
+        scope=scope,
+        platform=platform,
+        platform_version=platform_version,
+        component_revision=component_revision,
+        written_by_session=written_by_session,
     )
 
 
