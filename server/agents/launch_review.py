@@ -480,6 +480,12 @@ def maybe_write_ruling_to_memory(
 
 VERDICT_PATTERN = re.compile(r"^## Verdict\s*\n(.+)$", re.MULTILINE)
 
+PRIOR_RULING_CONTEXT_PATTERN = re.compile(
+    r"^## Prior Ruling Context.*?\n(.+?)(?=^## |\Z)", re.MULTILINE | re.DOTALL
+)
+
+NO_PRIOR_RULING_PHRASE = "no prior ruling found"
+
 
 def parse_verdict(ruling_text: str) -> str | None:
     """Extract the verdict line from the '## Verdict' section of a d6
@@ -490,6 +496,152 @@ def parse_verdict(ruling_text: str) -> str | None:
     """
     match = VERDICT_PATTERN.search(ruling_text)
     return match.group(1).strip() if match else None
+
+
+def artifact_found_prior_ruling(ruling_text: str) -> bool | None:
+    """Read the d6 ruling artifact's '## Prior Ruling Context' section and
+    report whether it states a prior ruling was found.
+
+    The section's own convention (all three Week 18 memory_on runs) is
+    to open either with the fixed absence phrase, "No prior ruling found
+    in Memory for this product + claim_type," or with a found-statement
+    ("A prior ruling file ... was found at ...") followed by the prior
+    ruling quoted verbatim.
+
+    That verbatim quoting matters here: when a prior *was* found, the
+    section's body contains the quoted prior's own Prior-Ruling-Context
+    subsection, which (for a claim-1 prior) itself reads "No prior
+    ruling found ...". A substring search over the whole section would
+    misread a found-with-quoted-absent-prior section as itself absent.
+    So this checks only the section's opening statement — the text up
+    to its first blank line — not the full section body.
+
+    Returns None if the section is missing entirely, or its opening
+    statement matches neither known convention — an unparseable
+    artifact is not evidence either way, and callers must treat that as
+    its own failure mode rather than guessing.
+    """
+    match = PRIOR_RULING_CONTEXT_PATTERN.search(ruling_text)
+    if not match:
+        return None
+    section = match.group(1)
+    opening = section.split("\n\n", 1)[0].strip().lower()
+    if NO_PRIOR_RULING_PHRASE in opening:
+        return False
+    if "was found at" in opening or "prior ruling file" in opening:
+        return True
+    return None
+
+
+def trace_probed_memory_mount(tool_call_events: list, mount_path: str) -> bool:
+    """Report whether the trace shows at least one `read` call against a
+    path under the session's Memory mount.
+
+    Tool-result payloads are never recorded in the trace (RunLog.tool_call
+    logs only the tool name and input arguments), so this can only ever
+    establish that a probe was *attempted* — never its outcome. Matches
+    any `agent.tool_use` event named "read" whose `file_path` argument is
+    the mount path or falls under it, regardless of which filename
+    variant was probed (Week 18 runs show the agent trying the
+    convention name, README.md, index.md, alternate spellings, a
+    subdirectory, etc. — any of them count as a probe).
+    """
+    mount_prefix = mount_path.rstrip("/") + "/"
+    for event in tool_call_events:
+        if event.type != "agent.tool_use" or event.name != "read":
+            continue
+        file_path = event.input.get("file_path")
+        if file_path is None:
+            continue
+        if file_path == mount_path or file_path.startswith(mount_prefix):
+            return True
+    return False
+
+
+def derive_manipulation_check(
+    variant: str,
+    claim_position: int | None,
+    tool_call_events: list,
+    mount_path: str | None,
+    ruling_text: str,
+) -> str:
+    """Derive the manipulation-check verdict from the tool-call trace and
+    the ruling artifact, replacing the old --manipulation-check CLI flag
+    that required a human to assert the outcome by hand.
+
+    Two observations feed the rules table:
+      probed = trace_probed_memory_mount(...) — at least one `read`
+               against the memory mount path appears in the trace.
+      found  = artifact_found_prior_ruling(ruling_text) — the artifact's
+               '## Prior Ruling Context' section states a prior was
+               found (True) or states none was found (False).
+
+    `found` cannot be derived from the trace alone: RunLog.tool_call
+    records only tool names and input arguments, never results, so a
+    "miss" is indistinguishable from a "hit" at the trace level — both
+    are just a `read` call with some `file_path`. The artifact's Prior
+    Ruling Context section is the only place a hit vs. miss is actually
+    recorded, so it is the source for `found`; the trace is the source
+    for `probed`.
+
+    Cross-check (per the task): a `read` against the mount is a
+    precondition for the artifact being able to claim a prior was found
+    — the agent cannot report finding something in Memory it never
+    looked at. If the artifact's section is missing/unparseable, or it
+    claims `found` while the trace shows no probe at all, the two
+    sources contradict each other (or one can't be checked against the
+    other), and that resolves to 'void:trace_artifact_mismatch' before
+    the table below is consulted — the disagreement is reported rather
+    than silently resolved either way.
+
+    Table (memory_on requires claim_position to distinguish claim 1 from
+    claim 2 in a pair; memory_off does not use it):
+      memory_on,  claim 1, probed, not found -> pass:probed_not_found
+      memory_on,  claim 2, probed, found     -> pass:probed_found
+      memory_on,  claim 2, probed, not found -> void:probed_not_found
+      memory_on,  any,     no probe          -> void:no_probe
+      memory_off, no probe                   -> pass:no_probe
+      memory_off, any probe                  -> void:memory_off_probed
+
+    Claim 1 is the first ruling on a product+claim_type, so it is
+    *expected* to probe and find nothing — that is its passing
+    condition, the mirror image of claim 2 (which is expected to probe
+    and find the claim-1 ruling now sitting in Memory). A claim 1 run
+    that probed and *did* find something is outside the six-row table —
+    it means Memory was not actually clean going into the pair — and is
+    reported as its own distinct code, 'void:claim_1_found_prior', so it
+    is not confused with a trace/artifact reconciliation failure.
+    """
+    probed = trace_probed_memory_mount(tool_call_events, mount_path) if mount_path else False
+    found = artifact_found_prior_ruling(ruling_text)
+
+    if variant == "memory_off":
+        if probed:
+            return "void:memory_off_probed"
+        return "pass:no_probe"
+
+    # memory_on from here.
+    if not probed:
+        return "void:no_probe"
+
+    if found is None:
+        return "void:trace_artifact_mismatch"
+
+    if claim_position == 1:
+        if found:
+            return "void:claim_1_found_prior"
+        return "pass:probed_not_found"
+
+    if claim_position == 2:
+        if found:
+            return "pass:probed_found"
+        return "void:probed_not_found"
+
+    raise ValueError(
+        "memory_on manipulation-check derivation requires claim_position "
+        "(1 or 2) to distinguish the first from the second claim in a "
+        f"pair; got {claim_position!r}."
+    )
 
 
 def write_retest_session_row(
@@ -586,7 +738,7 @@ def run_review(
     variant: str,
     pair_label: str | None = None,
     repetition: int | None = None,
-    manipulation_check: str | None = None,
+    claim_position: int | None = None,
 ) -> dict:
     run_log_path = make_run_log_path(claim_slug, variant)
     print(f"Run log: {run_log_path}")
@@ -710,6 +862,10 @@ def run_review(
         )
 
         iteration_count = (last_iteration + 1) if last_iteration is not None else None
+        manipulation_check = derive_manipulation_check(
+            variant, claim_position, tool_call_events, mount_path, ruling_text
+        )
+        run_log.write(f"MANIPULATION CHECK (derived): {manipulation_check}")
         try:
             write_retest_session_row(
                 session_id=session.id,
@@ -780,11 +936,15 @@ def main() -> None:
         "meaningful for h1-r retest runs.",
     )
     parser.add_argument(
-        "--manipulation-check",
+        "--claim-position",
+        type=int,
         default=None,
-        choices=["priors_consulted", "no_priors", "void"],
-        help="Retest harness manipulation-check outcome. Optional — only "
-        "meaningful for h1-r retest runs.",
+        choices=[1, 2],
+        help="Position of this claim within its h1-r retest pair/chain "
+        "(1 = first claim reviewed for a product+claim_type, 2 = second, "
+        "reviewed after the first is in Memory). Required for memory_on "
+        "retest runs — it is what the manipulation check is derived "
+        "against; not used for memory_off.",
     )
     args = parser.parse_args()
 
@@ -794,7 +954,7 @@ def main() -> None:
             args.variant,
             pair_label=args.pair_label,
             repetition=args.repetition,
-            manipulation_check=args.manipulation_check,
+            claim_position=args.claim_position,
         )
     except ProhibitedToolCallError as e:
         print("=" * 70, file=sys.stderr)

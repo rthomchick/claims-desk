@@ -7,6 +7,9 @@ results — no live Managed Agents session or API call, per d9's design
 
 from __future__ import annotations
 
+import ast
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -18,8 +21,10 @@ from server.agents import launch_review
 from server.agents.launch_review import (
     PROMPT_FILES,
     RunLog,
+    artifact_found_prior_ruling,
     build_session,
     check_for_prohibited_tool_calls,
+    derive_manipulation_check,
     fetch_output_artifact,
     get_memory_mount_path,
     get_memory_store_id,
@@ -27,8 +32,11 @@ from server.agents.launch_review import (
     maybe_write_ruling_to_memory,
     print_ruling_and_grading,
     run_review,
+    trace_probed_memory_mount,
     write_ruling_to_memory,
 )
+
+RUNS_DIR = Path(__file__).parent.parent.parent / "runs"
 
 
 def _conflict_error():
@@ -732,6 +740,236 @@ def test_injected_claim_slug_matches_define_outcome_source(monkeypatch, tmp_path
 
     assert "kalder_govern-compliance-01" in message_text
     assert "kalder_govern-compliance-01" in outcome_description
+
+
+# --- manipulation-check derivation (replaces --manipulation-check) ---
+
+TOOL_CALL_LINE = re.compile(r"^TOOL CALL \[(?P<event_type>[^\]]+)\] (?P<name>\S+) args=(?P<args>.+)$")
+RULING_ARTIFACT_HEADER = "RULING ARTIFACT"
+GRADING_RESULT_HEADER = "GRADING RESULT"
+
+
+def _load_real_run_log(filename: str) -> tuple[list, str, str]:
+    """Parse a real Week 18 run log into (tool_call_events, mount_path,
+    ruling_text) using the exact same line shape RunLog.tool_call writes:
+    'TOOL CALL [{event_type}] {name} args={input!r}'.
+
+    Reconstructs SimpleNamespace(type=, name=, input=) events — the same
+    attributes run_review's stream loop reads off real SDK events — by
+    ast.literal_eval-ing the repr'd args dict back into a dict. Used so
+    at least one derivation test runs against a genuine recorded trace
+    and artifact rather than a hand-built fixture.
+    """
+    text = (RUNS_DIR / filename).read_text()
+
+    mount_path = None
+    for line in text.splitlines():
+        if line.startswith("mount_path: "):
+            mount_path = line.removeprefix("mount_path: ").strip()
+            break
+
+    tool_call_events = []
+    for line in text.splitlines():
+        match = TOOL_CALL_LINE.match(line)
+        if not match:
+            continue
+        event_type = match.group("event_type")
+        if event_type not in ("agent.tool_use", "agent.mcp_tool_use"):
+            continue
+        tool_call_events.append(
+            SimpleNamespace(
+                type=event_type,
+                name=match.group("name"),
+                input=ast.literal_eval(match.group("args")),
+            )
+        )
+
+    artifact_start = text.rindex(RULING_ARTIFACT_HEADER)
+    artifact_end = text.index(GRADING_RESULT_HEADER, artifact_start)
+    artifact_lines = text[artifact_start:artifact_end].splitlines()
+    # Drop the "RULING ARTIFACT" banner line and its bracketing dash rules,
+    # plus the trailing blank line before the next banner's dash rule.
+    ruling_text = "\n".join(artifact_lines[2:-2]).strip()
+
+    return tool_call_events, mount_path, ruling_text
+
+
+WEEK18_MEMORY_ON_LOGS = {
+    "claim_1_first_attempt": "20260829T073109Z-kalder_govern-compliance-01-memory_on.log",
+    "claim_1_retry": "20260829T075256Z-kalder_govern-compliance-01-memory_on.log",
+    "claim_2": "20260829T075553Z-kalder_govern-compliance-02-memory_on.log",
+}
+
+
+def test_artifact_found_prior_ruling_true_on_real_claim_2_log():
+    _, _, ruling_text = _load_real_run_log(WEEK18_MEMORY_ON_LOGS["claim_2"])
+    assert artifact_found_prior_ruling(ruling_text) is True
+
+
+def test_artifact_found_prior_ruling_false_on_real_claim_1_logs():
+    for key in ("claim_1_first_attempt", "claim_1_retry"):
+        _, _, ruling_text = _load_real_run_log(WEEK18_MEMORY_ON_LOGS[key])
+        assert artifact_found_prior_ruling(ruling_text) is False
+
+
+def test_artifact_found_prior_ruling_does_not_misread_quoted_prior_absence():
+    """The claim-2 artifact quotes the claim-1 prior verbatim, and that
+    quoted prior's own Prior-Ruling-Context subsection reads 'No prior
+    ruling found ...'. A naive substring search over the whole section
+    would misread this as absence. Only the section's own opening
+    statement should be consulted."""
+    _, _, ruling_text = _load_real_run_log(WEEK18_MEMORY_ON_LOGS["claim_2"])
+    assert "No prior ruling found in Memory for this product" in ruling_text
+    assert artifact_found_prior_ruling(ruling_text) is True
+
+
+def test_artifact_found_prior_ruling_none_when_section_missing():
+    assert artifact_found_prior_ruling("# Ruling: x\n\n## Verdict\nsubstantiated\n") is None
+
+
+def test_trace_probed_memory_mount_true_on_real_claim_2_log():
+    tool_call_events, mount_path, _ = _load_real_run_log(WEEK18_MEMORY_ON_LOGS["claim_2"])
+    assert trace_probed_memory_mount(tool_call_events, mount_path) is True
+
+
+def test_trace_probed_memory_mount_false_with_no_matching_reads():
+    events = [
+        SimpleNamespace(type="agent.mcp_tool_use", name="list_claims", input={}),
+        SimpleNamespace(type="agent.tool_use", name="write", input={"file_path": "/mnt/session/outputs/x.md"}),
+    ]
+    assert trace_probed_memory_mount(events, "/mnt/memory/claims-review-memory-persistent") is False
+
+
+def test_trace_probed_memory_mount_ignores_reads_outside_mount():
+    events = [
+        SimpleNamespace(type="agent.tool_use", name="read", input={"file_path": "/mnt/session/uploads/rubric.md"}),
+    ]
+    assert trace_probed_memory_mount(events, "/mnt/memory/claims-review-memory-persistent") is False
+
+
+# The six rules-table rows, plus the mismatch case and the claim-1-found
+# case that falls outside the table.
+
+CLAIM_1_NOT_FOUND_ARTIFACT = (
+    "## Prior Ruling Context (verbatim, from Memory — or explicit absence)\n"
+    "No prior ruling found in Memory for this product + claim_type.\n"
+)
+CLAIM_2_FOUND_ARTIFACT = (
+    "## Prior Ruling Context (verbatim, from Memory — or explicit absence)\n"
+    "A prior ruling file for this product + claim_type was found at\n"
+    "`/mnt/memory/claims-review-memory-persistent/acme-widget-performance.md`.\n"
+)
+
+MOUNT = "/mnt/memory/claims-review-memory-persistent"
+
+
+def _read_event(file_path: str):
+    return SimpleNamespace(type="agent.tool_use", name="read", input={"file_path": file_path})
+
+
+def test_rule_memory_on_claim_1_probed_not_found_passes():
+    events = [_read_event(f"{MOUNT}/acme-widget-performance.md")]
+    result = derive_manipulation_check(
+        "memory_on", 1, events, MOUNT, CLAIM_1_NOT_FOUND_ARTIFACT
+    )
+    assert result == "pass:probed_not_found"
+
+
+def test_rule_memory_on_claim_2_probed_found_passes():
+    events = [_read_event(f"{MOUNT}/acme-widget-performance.md")]
+    result = derive_manipulation_check(
+        "memory_on", 2, events, MOUNT, CLAIM_2_FOUND_ARTIFACT
+    )
+    assert result == "pass:probed_found"
+
+
+def test_rule_memory_on_claim_2_probed_not_found_voids():
+    events = [_read_event(f"{MOUNT}/acme-widget-performance.md")]
+    result = derive_manipulation_check(
+        "memory_on", 2, events, MOUNT, CLAIM_1_NOT_FOUND_ARTIFACT
+    )
+    assert result == "void:probed_not_found"
+
+
+def test_rule_memory_on_no_probe_voids_for_claim_1():
+    events = [SimpleNamespace(type="agent.mcp_tool_use", name="list_claims", input={})]
+    result = derive_manipulation_check(
+        "memory_on", 1, events, MOUNT, CLAIM_1_NOT_FOUND_ARTIFACT
+    )
+    assert result == "void:no_probe"
+
+
+def test_rule_memory_on_no_probe_voids_for_claim_2():
+    events = [SimpleNamespace(type="agent.mcp_tool_use", name="list_claims", input={})]
+    result = derive_manipulation_check(
+        "memory_on", 2, events, MOUNT, CLAIM_2_FOUND_ARTIFACT
+    )
+    assert result == "void:no_probe"
+
+
+def test_rule_memory_off_no_probe_passes():
+    events = [SimpleNamespace(type="agent.mcp_tool_use", name="check_substantiation", input={})]
+    result = derive_manipulation_check("memory_off", None, events, None, CLAIM_1_NOT_FOUND_ARTIFACT)
+    assert result == "pass:no_probe"
+
+
+def test_rule_memory_off_any_probe_voids():
+    events = [_read_event(f"{MOUNT}/acme-widget-performance.md")]
+    result = derive_manipulation_check("memory_off", None, events, MOUNT, CLAIM_1_NOT_FOUND_ARTIFACT)
+    assert result == "void:memory_off_probed"
+
+
+def test_mismatch_artifact_section_unparseable_voids_distinctly():
+    events = [_read_event(f"{MOUNT}/acme-widget-performance.md")]
+    unparseable_artifact = "# Ruling: x\n\n## Verdict\nsubstantiated\n"
+    result = derive_manipulation_check("memory_on", 2, events, MOUNT, unparseable_artifact)
+    assert result == "void:trace_artifact_mismatch"
+
+
+def test_claim_1_found_prior_is_not_reported_as_mismatch():
+    """A claim-1 run that probed and found something is outside the
+    six-row table (Memory wasn't actually clean going into the pair) —
+    it must get its own diagnosable code, not be folded into the
+    trace/artifact mismatch code, since the two sources actually agree
+    here (both say a probe happened and something was found)."""
+    events = [_read_event(f"{MOUNT}/acme-widget-performance.md")]
+    result = derive_manipulation_check("memory_on", 1, events, MOUNT, CLAIM_2_FOUND_ARTIFACT)
+    assert result == "void:claim_1_found_prior"
+
+
+def test_memory_on_missing_claim_position_raises():
+    events = [_read_event(f"{MOUNT}/acme-widget-performance.md")]
+    with pytest.raises(ValueError, match="claim_position"):
+        derive_manipulation_check("memory_on", None, events, MOUNT, CLAIM_1_NOT_FOUND_ARTIFACT)
+
+
+# --- sanity check: derived value for each of the three real Week 18
+# memory_on runs, cross-checked against known history. Runs 1 and 2 are
+# both claim_1 (the first is the off-target attempt on -02 before the
+# operator corrected the target to -01; the second is the corrected
+# retry actually reviewing -01, the first-ever ruling for that
+# product+claim_type). Run 3 is claim_2 (-02, reviewed after -01's
+# ruling was written to Memory) and found the claim_1 prior. ---
+
+
+def test_week18_run_sanity_claim_1_first_attempt_is_probed_not_found():
+    events, mount_path, ruling_text = _load_real_run_log(
+        WEEK18_MEMORY_ON_LOGS["claim_1_first_attempt"]
+    )
+    result = derive_manipulation_check("memory_on", 1, events, mount_path, ruling_text)
+    assert result == "pass:probed_not_found"
+
+
+def test_week18_run_sanity_claim_1_retry_is_probed_not_found():
+    events, mount_path, ruling_text = _load_real_run_log(WEEK18_MEMORY_ON_LOGS["claim_1_retry"])
+    result = derive_manipulation_check("memory_on", 1, events, mount_path, ruling_text)
+    assert result == "pass:probed_not_found"
+
+
+def test_week18_run_sanity_claim_2_is_probed_found():
+    events, mount_path, ruling_text = _load_real_run_log(WEEK18_MEMORY_ON_LOGS["claim_2"])
+    result = derive_manipulation_check("memory_on", 2, events, mount_path, ruling_text)
+    assert result == "pass:probed_found"
 
 
 def test_memory_off_sends_no_injected_message(monkeypatch, tmp_path):
