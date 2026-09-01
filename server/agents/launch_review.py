@@ -486,6 +486,8 @@ PRIOR_RULING_CONTEXT_PATTERN = re.compile(
 
 NO_PRIOR_RULING_PHRASE = "no prior ruling found"
 
+FOUND_AT_PATTERN = re.compile(r"\bfound\b.*?\bat\b", re.DOTALL)
+
 
 def parse_verdict(ruling_text: str) -> str | None:
     """Extract the verdict line from the '## Verdict' section of a d6
@@ -502,11 +504,13 @@ def artifact_found_prior_ruling(ruling_text: str) -> bool | None:
     """Read the d6 ruling artifact's '## Prior Ruling Context' section and
     report whether it states a prior ruling was found.
 
-    The section's own convention (all three Week 18 memory_on runs) is
-    to open either with the fixed absence phrase, "No prior ruling found
-    in Memory for this product + claim_type," or with a found-statement
-    ("A prior ruling file ... was found at ...") followed by the prior
-    ruling quoted verbatim.
+    The section's own convention is to open either with the fixed
+    absence phrase, "No prior ruling found in Memory for this product +
+    claim_type," or with a found-statement followed by the prior ruling
+    quoted verbatim. The found-statement's exact wording varies by run —
+    observed phrasings include "Prior ruling file found and read at
+    ...", "A prior ruling file was found at ...", "A prior ruling file
+    was found at ... and read.", and "File found and read at ...".
 
     That verbatim quoting matters here: when a prior *was* found, the
     section's body contains the quoted prior's own Prior-Ruling-Context
@@ -515,6 +519,15 @@ def artifact_found_prior_ruling(ruling_text: str) -> bool | None:
     misread a found-with-quoted-absent-prior section as itself absent.
     So this checks only the section's opening statement — the text up
     to its first blank line — not the full section body.
+
+    Rather than enumerating each observed phrasing literally, the
+    found-branch matches generically: the word "found" followed
+    somewhere later by the word "at" (FOUND_AT_PATTERN), which covers
+    all four observed forms — each is some variation of "<subject>
+    found ... at <path>". This is checked only after the absence phrase
+    has already failed to match, so "no prior ruling found in Memory"
+    (found with no following "at") cannot fall through into this
+    branch.
 
     Returns None if the section is missing entirely, or its opening
     statement matches neither known convention — an unparseable
@@ -528,7 +541,7 @@ def artifact_found_prior_ruling(ruling_text: str) -> bool | None:
     opening = section.split("\n\n", 1)[0].strip().lower()
     if NO_PRIOR_RULING_PHRASE in opening:
         return False
-    if "was found at" in opening or "prior ruling file" in opening:
+    if FOUND_AT_PATTERN.search(opening):
         return True
     return None
 

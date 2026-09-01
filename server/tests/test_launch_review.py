@@ -827,6 +827,54 @@ def test_artifact_found_prior_ruling_none_when_section_missing():
     assert artifact_found_prior_ruling("# Ruling: x\n\n## Verdict\nsubstantiated\n") is None
 
 
+def _ruling_with_prior_ruling_context(opening: str) -> str:
+    return (
+        "# Ruling: x\n\n"
+        "## Verdict\npartially\n\n"
+        f"## Prior Ruling Context (verbatim, from Memory — or explicit absence)\n{opening}\n\n"
+        "## Rationale\ntext\n"
+    )
+
+
+# Verbatim opening lines observed across the six Week 18/19 memory_on
+# claim-2 runs (d(w19)-14) — four distinct found-phrasings.
+OBSERVED_FOUND_OPENINGS = [
+    "Prior ruling file found and read at "
+    "`/mnt/memory/claims-review-memory-persistent/vendor_compat-compatibility.md`, "
+    "recording a ruling on `vendor_compat-compatibility-01`.",
+    "A prior ruling file for this product + claim_type was found at\n"
+    "`/mnt/memory/claims-review-memory-persistent/kalder_govern-compliance.md`.\n"
+    "It records a ruling on a different claim within the same product and\n"
+    "claim_type. Verbatim excerpts follow.",
+    "A prior ruling file was found at "
+    "`/mnt/memory/claims-review-memory-persistent/vendor_compat-compatibility.md` "
+    "and read. It records a ruling on a different claim within the same product + claim_type.",
+    "File found and read at "
+    "`/mnt/memory/claims-review-memory-persistent/vendor_compat-compatibility.md`. "
+    "It records a prior ruling on a different claim within this same product + claim_type.",
+]
+
+
+@pytest.mark.parametrize("opening", OBSERVED_FOUND_OPENINGS)
+def test_artifact_found_prior_ruling_true_on_observed_phrasings(opening):
+    ruling_text = _ruling_with_prior_ruling_context(opening)
+    assert artifact_found_prior_ruling(ruling_text) is True
+
+
+def test_artifact_found_prior_ruling_false_on_absence_phrasing():
+    ruling_text = _ruling_with_prior_ruling_context(
+        "No prior ruling found in Memory for this product + claim_type."
+    )
+    assert artifact_found_prior_ruling(ruling_text) is False
+
+
+def test_artifact_found_prior_ruling_none_on_unparseable_opening():
+    ruling_text = _ruling_with_prior_ruling_context(
+        "Memory was consulted and nothing further is reported here."
+    )
+    assert artifact_found_prior_ruling(ruling_text) is None
+
+
 def test_trace_probed_memory_mount_true_on_real_claim_2_log():
     tool_call_events, mount_path, _ = _load_real_run_log(WEEK18_MEMORY_ON_LOGS["claim_2"])
     assert trace_probed_memory_mount(tool_call_events, mount_path) is True
