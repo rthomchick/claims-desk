@@ -3,4 +3,12 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Session logs. Deliberately not committed: this repo is public and
+# run logs capture full tool-call traces, API responses, and agent
+# narration, so a single unhandled traceback could put a credential
+# in permanent git history. Logs go to the Week N Resources page in
+# Notion instead. See Week 19 decision d(w19)-8.
 runs/
+
+**/.DS_Store
