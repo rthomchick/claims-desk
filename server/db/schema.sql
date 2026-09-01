@@ -1,7 +1,7 @@
 create table claims (
     claim_id uuid primary key default gen_random_uuid(),
     product_key text not null,           -- e.g. 'kalder_resolve', matches kalder_data_model.py PRODUCTS keys
-    claim_type text not null check (claim_type in ('performance', 'comparative', 'compliance', 'superlative')),
+    claim_type text not null check (claim_type in ('performance', 'comparative', 'compliance', 'superlative', 'compatibility')),
     claim_text text not null,
     status text not null default 'unverified' check (status in ('unverified', 'substantiated', 'insufficient', 'expired')),
     record_status text not null default 'active' check (record_status in ('active', 'deleted')),
@@ -32,7 +32,7 @@ comment on column evidence_links.scope is
 comment on column evidence_links.platform is
     'Compatibility claims: certified platform/OS name, e.g. ''Red Hat Enterprise Linux''. Version and revision facts live here and in platform_version/component_revision, not in scope.';
 comment on column evidence_links.platform_version is
-    'Compatibility claims: certified version range, e.g. ''9.0-9.x''. Deterministic checks read this field, not scope.';
+    'Stores the certification record''s range notation verbatim as the vendor publishes it (e.g. ''9.0-9.x'', ''8.6-8.x''). Not normalized. The major version is parsed as the leading digit run, so the vendor''s own format must be preserved.';
 comment on column evidence_links.component_revision is
     'Compatibility claims: SKU, firmware, or driver revision covered. Deterministic checks read this field, not scope.';
 
