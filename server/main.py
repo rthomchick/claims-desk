@@ -128,15 +128,31 @@ def list_claims(
     return _list_claims(claim_type=claim_type, status=status, product_key=product_key)
 
 
-@mcp.custom_route("/claims/{slug}.json", methods=["GET"])
+@mcp.custom_route("/claims/{slug}.json", methods=["GET", "OPTIONS"])
 async def get_claim_by_slug(request: Request) -> Response:
     """Read-only: resolve a claim by claim_slug and return get_claim_status's payload shape."""
+    if request.method == "OPTIONS":
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+            },
+        )
     slug = request.path_params["slug"]
     claim = fetchone_dict("select claim_id from claims where claim_slug = %s", (slug,))
     if claim is None:
-        return JSONResponse({"error": f"no claim found with claim_slug {slug}"}, status_code=404)
+        return JSONResponse(
+            {"error": f"no claim found with claim_slug {slug}"},
+            status_code=404,
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
     payload = json.dumps(_get_claim_status(claim["claim_id"]), default=str)
-    return Response(payload, media_type="application/json")
+    return Response(
+        payload,
+        media_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
 
 
 if __name__ == "__main__":
