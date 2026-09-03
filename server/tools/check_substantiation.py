@@ -100,7 +100,7 @@ def _platform_lifecycle_status(platform: str | None, platform_version: str | Non
 def check_substantiation(claim_id: str) -> dict:
     claim = fetchone_dict(
         """
-        select claim_id, product_key, claim_type, claim_text, status,
+        select claim_id, product_key, claim_type, claim_text,
                risk_class, risk_factors
         from claims
         where claim_id = %s
@@ -150,6 +150,24 @@ def check_substantiation(claim_id: str) -> dict:
         )
     else:
         platform_lifecycle_status = None
+
+    latest_ruling = fetchone_dict(
+        """
+        select verdict
+        from review_rulings
+        where claim_id = %s
+        order by created_at desc
+        limit 1
+        """,
+        (claim_id,),
+    )
+    claim["verification"] = latest_ruling["verdict"] if latest_ruling else "unreviewed"
+
+    expiries = [row["expiry_date"] for row in evidence if row.get("expiry_date") is not None]
+    if not expiries:
+        claim["evidence_current"] = None
+    else:
+        claim["evidence_current"] = all(expiry >= date.today() for expiry in expiries)
 
     return {
         "claim": claim,

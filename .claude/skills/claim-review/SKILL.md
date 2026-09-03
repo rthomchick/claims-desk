@@ -20,7 +20,7 @@ This skill does not cover: adding a new claim to the registry (use `append_claim
 
 ## The review workflow
 
-1. **Retrieve the claim.** Call `get_claim_status` to see the claim's current state, type, and any prior ruling. If a ruling already exists, treat it as context, not as binding — evidence and expiry status can change.
+1. **Retrieve the claim.** Call `get_claim_status` to see the claim's type, its `verification` (the verdict of the most recent ruling, or `unreviewed` if none exists), and any prior ruling. If a ruling already exists, treat it as context, not as binding — evidence and expiry status can change.
 
 2. **Pull the substantiation material.** Call `check_substantiation`. This returns the claim, its linked evidence, the evidence standard for its claim type, and a set of deterministic hygiene checks (evidence link present, expiry status, sample size present, platform lifecycle status, etc.). **This tool does not render a verdict — that judgment is yours.** Do not treat the absence of a verdict field as an oversight; it's deliberate. See `references/evidence-standards.md` for what "sufficient" means per claim type.
 

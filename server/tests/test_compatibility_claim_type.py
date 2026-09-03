@@ -68,7 +68,6 @@ def _claim_row(claim_type="compatibility"):
         "product_key": "acme_widget",
         "claim_type": claim_type,
         "claim_text": "Certified for Red Hat Enterprise Linux 9",
-        "status": "unverified",
         "risk_class": None,
         "risk_factors": None,
     }
@@ -87,7 +86,9 @@ def test_check_substantiation_compatibility_expired_lifecycle():
         "platform_version": "6.0-6.x",
         "component_revision": "rev-A",
     }
-    with patch.object(cs, "fetchone_dict", return_value=_claim_row()), patch.object(
+    with patch.object(
+        cs, "fetchone_dict", side_effect=[_claim_row(), None]
+    ), patch.object(
         cs, "fetchall_dict", return_value=[evidence_row]
     ), patch.object(cs, "_platform_lifecycle_status", return_value="expired"):
         result = cs.check_substantiation("fake-id")
@@ -96,10 +97,14 @@ def test_check_substantiation_compatibility_expired_lifecycle():
     assert result["hygiene_checks"]["is_expired"] is None
     assert result["hygiene_checks"]["has_sample_size"] is None
     assert result["evidence_standard"] == cs.EVIDENCE_STANDARDS["compatibility"]
+    assert result["claim"]["verification"] == "unreviewed"
+    assert result["claim"]["evidence_current"] is None
 
 
 def test_check_substantiation_compatibility_unknown_lifecycle_no_evidence():
-    with patch.object(cs, "fetchone_dict", return_value=_claim_row()), patch.object(
+    with patch.object(
+        cs, "fetchone_dict", side_effect=[_claim_row(), None]
+    ), patch.object(
         cs, "fetchall_dict", return_value=[]
     ):
         result = cs.check_substantiation("fake-id")
@@ -119,11 +124,87 @@ def test_check_substantiation_unrecognized_claim_type_returns_error_not_keyerror
 
 def test_check_substantiation_non_compatibility_types_get_null_lifecycle_status():
     for claim_type in ("performance", "comparative", "compliance", "superlative"):
-        with patch.object(cs, "fetchone_dict", return_value=_claim_row(claim_type=claim_type)), patch.object(
+        with patch.object(
+            cs, "fetchone_dict", side_effect=[_claim_row(claim_type=claim_type), None]
+        ), patch.object(
             cs, "fetchall_dict", return_value=[]
         ):
             result = cs.check_substantiation("fake-id")
         assert result["hygiene_checks"]["platform_lifecycle_status"] is None, claim_type
+
+
+# ---------------------------------------------------------------------------
+# verification / evidence_current — read-time derivation rules (this commit)
+# ---------------------------------------------------------------------------
+
+def test_verification_is_unreviewed_when_no_ruling_exists():
+    with patch.object(
+        cs, "fetchone_dict", side_effect=[_claim_row(claim_type="performance"), None]
+    ), patch.object(cs, "fetchall_dict", return_value=[]):
+        result = cs.check_substantiation("fake-id")
+
+    assert result["claim"]["verification"] == "unreviewed"
+
+
+def test_verification_reflects_the_single_existing_ruling():
+    with patch.object(
+        cs,
+        "fetchone_dict",
+        side_effect=[_claim_row(claim_type="performance"), {"verdict": "substantiated"}],
+    ), patch.object(cs, "fetchall_dict", return_value=[]):
+        result = cs.check_substantiation("fake-id")
+
+    assert result["claim"]["verification"] == "substantiated"
+
+
+def test_verification_reflects_the_most_recent_of_two_rulings():
+    # review_rulings is append-only; the tool selects by created_at desc
+    # limit 1, so fetchone_dict is trusted here to already hand back only
+    # the most recent row — this asserts that row's verdict wins.
+    with patch.object(
+        cs,
+        "fetchone_dict",
+        side_effect=[_claim_row(claim_type="performance"), {"verdict": "escalate"}],
+    ), patch.object(cs, "fetchall_dict", return_value=[]):
+        result = cs.check_substantiation("fake-id")
+
+    assert result["claim"]["verification"] == "escalate"
+
+
+def test_evidence_current_true_when_all_expiries_unexpired():
+    evidence = [
+        {"evidence_url": "https://example.com/a", "expiry_date": date(9999, 1, 1)},
+        {"evidence_url": "https://example.com/b", "expiry_date": date(9999, 6, 1)},
+    ]
+    with patch.object(
+        cs, "fetchone_dict", side_effect=[_claim_row(claim_type="compliance"), None]
+    ), patch.object(cs, "fetchall_dict", return_value=evidence):
+        result = cs.check_substantiation("fake-id")
+
+    assert result["claim"]["evidence_current"] is True
+
+
+def test_evidence_current_false_when_any_expiry_has_passed():
+    evidence = [
+        {"evidence_url": "https://example.com/a", "expiry_date": date(9999, 1, 1)},
+        {"evidence_url": "https://example.com/b", "expiry_date": date(2000, 1, 1)},
+    ]
+    with patch.object(
+        cs, "fetchone_dict", side_effect=[_claim_row(claim_type="compliance"), None]
+    ), patch.object(cs, "fetchall_dict", return_value=evidence):
+        result = cs.check_substantiation("fake-id")
+
+    assert result["claim"]["evidence_current"] is False
+
+
+def test_evidence_current_null_when_no_evidence_carries_an_expiry():
+    evidence = [{"evidence_url": "https://example.com/a", "expiry_date": None}]
+    with patch.object(
+        cs, "fetchone_dict", side_effect=[_claim_row(claim_type="compliance"), None]
+    ), patch.object(cs, "fetchall_dict", return_value=evidence):
+        result = cs.check_substantiation("fake-id")
+
+    assert result["claim"]["evidence_current"] is None
 
 
 # ---------------------------------------------------------------------------

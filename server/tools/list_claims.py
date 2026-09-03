@@ -2,6 +2,12 @@
 
 Returns slug-first summaries only; full evidence and ruling payload remains
 get_claim_status's job once the caller has a slug or claim_id in hand.
+
+UNRESOLVED: the `status` input filter parameter and the `record_status`
+output field now use different names for the same underlying concept
+(f11 fix removed a rename that had made them match). Left asymmetric in
+this commit deliberately; flagged for a separate decision rather than
+resolved here.
 """
 
 from __future__ import annotations
@@ -43,6 +49,4 @@ def list_claims(
     """
 
     rows = fetchall_dict(query, tuple(params))
-    for row in rows:
-        row["status"] = row.pop("record_status")
     return rows

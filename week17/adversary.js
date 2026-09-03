@@ -40,7 +40,7 @@ const CLAIM_FETCH_SCHEMA = {
     error: { type: 'string', description: 'Set to "claim_not_found" if registry returns no record for this ID; leave absent otherwise' },
     claim_text: { type: 'string' },
     claim_type: { type: 'string', description: 'Superlative | Performance | Comparative | Compliance' },
-    current_status: { type: 'string' },
+    verification: { type: 'string' },
     risk_class: { type: 'string' },
     risk_factors: { type: 'array', items: { type: 'string' } },
     evidence_standard: { type: 'string' },
@@ -281,7 +281,7 @@ Return structured data with ALL of the following fields (where available):
 - error: set to "claim_not_found" ONLY if the registry returned an error or no record for this claim ID; leave absent or null otherwise
 - claim_text: the actual marketing claim text
 - claim_type: Superlative | Performance | Comparative | Compliance (exact casing from registry)
-- current_status: the current workflow status from get_claim_status
+- verification: the verification verdict from get_claim_status
 - risk_class: the risk classification (e.g., high, medium, low)
 - risk_factors: list of risk factors from the registry (array of strings)
 - evidence_standard: the evidence standard the registry applies to this claim type
@@ -303,7 +303,7 @@ if (claimData.error === 'claim_not_found') {
 }
 
 log(`Claim: "${claimData.claim_text}"`)
-log(`Type: ${claimData.claim_type} | Status: ${claimData.current_status} | Risk: ${claimData.risk_class}`)
+log(`Type: ${claimData.claim_type} | Verification: ${claimData.verification} | Risk: ${claimData.risk_class}`)
 log(`Evidence standard: ${claimData.evidence_standard}`)
 log(`Claim fetch: ~${fetchTokens} output tokens`)
 

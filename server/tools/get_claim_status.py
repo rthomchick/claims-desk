@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from server.db.client import fetchone_dict, fetchall_dict
 
 
 def get_claim_status(claim_id: str) -> dict:
     claim = fetchone_dict(
         """
-        select claim_id, product_key, claim_type, claim_text, status,
+        select claim_id, product_key, claim_type, claim_text,
                record_status, claim_slug, risk_class, risk_factors,
                created_at, updated_at
         from claims
@@ -39,6 +41,14 @@ def get_claim_status(claim_id: str) -> dict:
         """,
         (claim_id,),
     )
+
+    claim["verification"] = latest_ruling["verdict"] if latest_ruling else "unreviewed"
+
+    expiries = [row["expiry_date"] for row in evidence if row.get("expiry_date") is not None]
+    if not expiries:
+        claim["evidence_current"] = None
+    else:
+        claim["evidence_current"] = all(expiry >= date.today() for expiry in expiries)
 
     return {
         "claim": claim,
