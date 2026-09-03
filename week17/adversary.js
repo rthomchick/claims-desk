@@ -467,6 +467,28 @@ CRITICAL INSTRUCTIONS:
   )
   const advTokens = budget.spent() - advS
 
+  // Guard mirrors week17/lib/agent_result_guard.mjs (checkAgentResult) — see
+  // week17/test/agent_result_guard.test.mjs. Workflow scripts have no
+  // filesystem/module access (same constraint noted on the ruling gate
+  // mirror below), so this can't be imported; keep the shape in sync.
+  if (!adversary || !Array.isArray(adversary.all_attacks) || !Array.isArray(adversary.new_critical_attacks) || !Array.isArray(adversary.reputational_attacks_excluded)) {
+    log(`ABORT: adversary-r${round} returned null or malformed result (expected all_attacks, new_critical_attacks, reputational_attacks_excluded arrays) — terminating cleanly`)
+    return {
+      aborted: true,
+      reason: `adversary-r${round} failed or returned malformed result — round ${round} incomplete, no verdict produced`,
+      claim_id: CLAIM_ID,
+      claim_text: claimData.claim_text,
+      claim_type: claimData.claim_type,
+      completed: {
+        claim_fetch: true,
+        evidence_gathering: { angles: validEvidence.map(e => e.angle) },
+        adversarial_rounds_completed: roundResults.map(r => ({ round: r.round, adversary_verdict: r.adversary.verdict_assessment, defender_verdict: r.defender.current_verdict })),
+        round_reached: round,
+        failed_agent: `adversary-r${round}`,
+      },
+    }
+  }
+
   // Log and accumulate reputational attacks filtered by adversary self-sorting
   const repFiltered = adversary.reputational_attacks_excluded || []
   if (repFiltered.length > 0) {
@@ -501,6 +523,25 @@ In tool_calls_made: report 0 — no web search needed, reason over gathered evid
     { label: `defender-r${round}`, phase: 'Adversarial Loop', model: 'haiku', schema: DEFENDER_SCHEMA }
   )
   const defTokens = budget.spent() - defS
+
+  if (!defender || typeof defender.current_verdict !== 'string' || !Array.isArray(defender.surviving_attacks)) {
+    log(`ABORT: defender-r${round} returned null or malformed result (expected current_verdict string, surviving_attacks array) — terminating cleanly`)
+    return {
+      aborted: true,
+      reason: `defender-r${round} failed or returned malformed result — round ${round} incomplete, no verdict produced`,
+      claim_id: CLAIM_ID,
+      claim_text: claimData.claim_text,
+      claim_type: claimData.claim_type,
+      completed: {
+        claim_fetch: true,
+        evidence_gathering: { angles: validEvidence.map(e => e.angle) },
+        adversarial_rounds_completed: roundResults.map(r => ({ round: r.round, adversary_verdict: r.adversary.verdict_assessment, defender_verdict: r.defender.current_verdict })),
+        round_reached: round,
+        adversary_completed_this_round: true,
+        failed_agent: `defender-r${round}`,
+      },
+    }
+  }
 
   const newVerdict = defender.current_verdict
   const verdictUnchanged = prevRoundVerdict !== null && newVerdict === prevRoundVerdict
@@ -585,6 +626,25 @@ Produce the final substantiation report:
   { label: 'synthesis', phase: 'Synthesis', model: 'opus', schema: SYNTHESIS_SCHEMA }
 )
 const p4Tokens = budget.spent() - p4S
+
+if (!synthesis || typeof synthesis.verdict !== 'string' || typeof synthesis.verdict_rationale !== 'string' || !Array.isArray(synthesis.surviving_evidence) || !Array.isArray(synthesis.attacks_withstood) || !Array.isArray(synthesis.attacks_that_landed)) {
+  log(`ABORT: synthesis returned null or malformed result (expected verdict, verdict_rationale strings; surviving_evidence, attacks_withstood, attacks_that_landed arrays) — terminating cleanly`)
+  return {
+    aborted: true,
+    reason: 'synthesis failed or returned malformed result — adversarial loop complete but no verdict produced',
+    claim_id: CLAIM_ID,
+    claim_text: claimData.claim_text,
+    claim_type: claimData.claim_type,
+    completed: {
+      claim_fetch: true,
+      evidence_gathering: { angles: validEvidence.map(e => e.angle) },
+      adversarial_rounds_completed: roundResults.map(r => ({ round: r.round, adversary_verdict: r.adversary.verdict_assessment, defender_verdict: r.defender.current_verdict })),
+      rounds_run: roundsRun,
+      stop_reason: stopReason,
+      failed_agent: 'synthesis',
+    },
+  }
+}
 
 log(`Final verdict: ${synthesis.verdict}`)
 log(`Synthesis: ~${p4Tokens} output tokens`)
