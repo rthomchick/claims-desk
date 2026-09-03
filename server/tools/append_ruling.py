@@ -9,6 +9,12 @@ Gate enforcement (verdict enum, convergence known) is the caller's
 responsibility — see week17/adversary.js. This tool trusts its arguments;
 the DB's review_rulings_verdict_check and convergence CHECK constraints
 are the last line of defense, not the gate.
+
+Convention (Week 20 d2): production writes come only from gated instrument
+runs; tests use rollback isolation (server/tests/conftest.py); a provenance
+column distinguishing the two is deliberately deferred to an ADR — until it
+exists, nothing in a row identifies its writer, which is why eight fixture
+rulings were indistinguishable from real verdicts on inspection.
 """
 
 from __future__ import annotations
