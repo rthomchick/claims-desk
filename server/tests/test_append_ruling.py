@@ -66,6 +66,8 @@ def test_passing_gate_produces_exactly_one_row(rollback_db):
     status = get_claim_status(claim_id)
     assert status["claim"]["verification"] == "substantiated"
     assert status["latest_ruling"]["verdict"] == "substantiated"
+    assert status["latest_ruling"]["convergence"] == "attack_exhaustion"
+    assert status["latest_ruling"]["rounds"] == 2
 
 
 def test_verdict_outside_enum_rejected_nothing_written(rollback_db):
@@ -156,6 +158,8 @@ def test_two_rulings_same_claim_two_rows_later_wins_created_at_desc(rollback_db)
     status = get_claim_status(claim_id)
     assert status["claim"]["verification"] == "substantiated"
     assert status["latest_ruling"]["verdict"] == "substantiated"
+    assert status["latest_ruling"]["convergence"] == "attack_exhaustion"
+    assert status["latest_ruling"]["rounds"] == 1
 
 
 def test_escalate_persists_rather_than_being_held(rollback_db):
@@ -176,6 +180,8 @@ def test_escalate_persists_rather_than_being_held(rollback_db):
     status = get_claim_status(claim_id)
     assert status["claim"]["verification"] == "escalate"
     assert status["latest_ruling"]["verdict"] == "escalate"
+    assert status["latest_ruling"]["convergence"] == "round_cap"
+    assert status["latest_ruling"]["rounds"] == 3
 
 
 def test_append_ruling_not_found_claim_id_still_rejected_by_fk(rollback_db):
