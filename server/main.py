@@ -22,7 +22,10 @@ from __future__ import annotations
 import os
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
+from server.db.client import fetchone_dict
 from server.tools.append_claim import append_claim as _append_claim
 from server.tools.get_claim_status import get_claim_status as _get_claim_status
 from server.tools.check_substantiation import check_substantiation as _check_substantiation
@@ -121,6 +124,16 @@ def list_claims(
     product_key, claim_type, status, risk_class — with no evidence payload.
     """
     return _list_claims(claim_type=claim_type, status=status, product_key=product_key)
+
+
+@mcp.custom_route("/claims/{slug}.json", methods=["GET"])
+async def get_claim_by_slug(request: Request) -> Response:
+    """Read-only: resolve a claim by claim_slug and return get_claim_status's payload shape."""
+    slug = request.path_params["slug"]
+    claim = fetchone_dict("select claim_id from claims where claim_slug = %s", (slug,))
+    if claim is None:
+        return JSONResponse({"error": f"no claim found with claim_slug {slug}"}, status_code=404)
+    return JSONResponse(_get_claim_status(claim["claim_id"]))
 
 
 if __name__ == "__main__":

@@ -45,11 +45,20 @@ comment on column evidence_links.component_revision is
 create table review_rulings (
     ruling_id uuid primary key default gen_random_uuid(),
     claim_id uuid not null references claims(claim_id),  -- no cascade: rulings survive a soft-deleted claim (d1)
-    ruling text not null check (ruling in ('approved', 'rejected', 'escalated')),
+    verdict text not null check (verdict in ('substantiated', 'partially', 'not_substantiated', 'escalate')),
     rationale text,
     reviewed_by text,                    -- 'system' for MCP-tool-driven, agent identifier for Week 18 review agent
-    created_at timestamptz not null default now()
+    created_at timestamptz not null default now(),
+    convergence text check (convergence in ('attack_exhaustion', 'round_cap')),
+    rounds integer,
+    written_by_session text              -- nullable; Managed Agents session.id, see column comment below
 );
+
+create index review_rulings_claim_id_created_at_idx
+    on review_rulings (claim_id, created_at desc);
+
+comment on table review_rulings is
+    'Append-only: inserts only, no updates. A correction is a superseding row (later created_at for the same claim_id), never an update to an existing one. The claim_id FK deliberately has no ON DELETE (Week 18 d1) so rulings survive a soft-deleted claim; append-only depends on that.';
 
 create view active_claims as
 select * from claims where record_status = 'active';

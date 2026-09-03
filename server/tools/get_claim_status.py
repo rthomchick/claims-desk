@@ -31,7 +31,7 @@ def get_claim_status(claim_id: str) -> dict:
 
     latest_ruling = fetchone_dict(
         """
-        select ruling_id, ruling, rationale, reviewed_by, created_at
+        select ruling_id, verdict, rationale, reviewed_by, created_at
         from review_rulings
         where claim_id = %s
         order by created_at desc
