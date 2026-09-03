@@ -29,6 +29,7 @@ from starlette.responses import JSONResponse, Response
 
 from server.db.client import fetchone_dict
 from server.tools.append_claim import append_claim as _append_claim
+from server.tools.append_ruling import append_ruling as _append_ruling
 from server.tools.get_claim_status import get_claim_status as _get_claim_status
 from server.tools.check_substantiation import check_substantiation as _check_substantiation
 from server.tools.classify_claim_risk import classify_claim_risk as _classify_claim_risk
@@ -82,6 +83,36 @@ def append_claim(
         platform=platform,
         platform_version=platform_version,
         component_revision=component_revision,
+        written_by_session=written_by_session,
+    )
+
+
+@mcp.tool()
+def append_ruling(
+    claim_id: str,
+    verdict: str,
+    rationale: str | None = None,
+    reviewed_by: str | None = None,
+    convergence: str | None = None,
+    rounds: int | None = None,
+    written_by_session: str | None = None,
+) -> dict:
+    """Insert a review ruling. Append-only: no updates, no upserts — a
+    correction is a new row with a later created_at for the same claim_id.
+
+    verdict: one of substantiated, partially, not_substantiated, escalate.
+    convergence: attack_exhaustion or round_cap — how the reviewing run
+        terminated. reviewed_by: instrument identifier naming the review
+        agent/tool and its version. written_by_session: identifier of the
+        session/agent writing this ruling.
+    """
+    return _append_ruling(
+        claim_id=claim_id,
+        verdict=verdict,
+        rationale=rationale,
+        reviewed_by=reviewed_by,
+        convergence=convergence,
+        rounds=rounds,
         written_by_session=written_by_session,
     )
 

@@ -6,6 +6,7 @@ export const meta = {
     { title: 'Evidence Gathering', detail: '3 parallel Haiku agents on claim-type-selected angles; retry guard' },
     { title: 'Adversarial Loop', detail: 'Opus adversary + Haiku defender, max 3 rounds, convergence on zero new critical attacks' },
     { title: 'Synthesis', detail: 'Opus final verdict: evidence audit, attack inventory, verdict rationale' },
+    { title: 'Ruling Persistence', detail: 'Gate the ruling artifact (verdict enum + known convergence mode); insert on pass, log-only on fail' },
   ],
 }
 
@@ -137,7 +138,7 @@ const SYNTHESIS_SCHEMA = {
   type: 'object',
   required: ['verdict', 'verdict_rationale', 'surviving_evidence', 'attacks_withstood', 'attacks_that_landed'],
   properties: {
-    verdict: { enum: ['substantiated', 'partially', 'not_substantiated'] },
+    verdict: { enum: ['substantiated', 'partially', 'not_substantiated', 'escalate'] },
     verdict_rationale: { type: 'string', description: '2-3 paragraphs: overall verdict, what evidence survived, which attacks prevailed' },
     surviving_evidence: { type: 'array', items: { type: 'string' } },
     attacks_withstood: { type: 'array', items: { type: 'string' } },
@@ -423,7 +424,7 @@ phase('Adversarial Loop')
 let prevRoundVerdict = null
 let currentVerdict = null
 let roundsRun = 0
-let stopReason = 'hit_cap'
+let stopReason = 'round_cap'
 const roundResults = []
 const roundInstr = []
 const allReputationalFiltered = []
@@ -528,7 +529,7 @@ In tool_calls_made: report 0 — no web search needed, reason over gathered evid
   // Defender verdict oscillation is downstream noise on borderline claims and
   // must not control loop termination.
   if (noNewCriticalAttacks) {
-    stopReason = 'converged'
+    stopReason = 'attack_exhaustion'
     log(`Converged at round ${round}: no new critical attacks — adversary exhausted (defender verdict=${newVerdict}, verdict_unchanged=${verdictUnchanged})`)
     break
   }
@@ -576,7 +577,7 @@ VERDICT ARBITER NOTE: You are the authoritative verdict arbiter. You MAY overrid
 ${synthesisTypeGuidance ? '\nCLAIM-TYPE GUIDANCE: ' + synthesisTypeGuidance : ''}
 
 Produce the final substantiation report:
-- verdict: overall verdict (substantiated / partially / not_substantiated). Align with the evidence record — override defender if warranted.
+- verdict: overall verdict (substantiated / partially / not_substantiated / escalate). Align with the evidence record — override defender if warranted. Use escalate if the record leaves the verdict genuinely undecidable by this review rather than merely unfavorable.
 - verdict_rationale: 2-3 paragraphs explaining the verdict, what evidence survived, and which attacks prevailed.
 - surviving_evidence: list only evidence items that withstood all adversarial scrutiny
 - attacks_withstood: list attacks the claim successfully neutralized (defender outcome = "neutralized")
@@ -589,6 +590,94 @@ log(`Final verdict: ${synthesis.verdict}`)
 log(`Synthesis: ~${p4Tokens} output tokens`)
 if (allReputationalFiltered.length > 0) {
   log(`Reputational attacks filtered total: ${allReputationalFiltered.length} (excluded from convergence check)`)
+}
+
+// ── Phase 5: Ruling Persistence ───────────────────────────────────────────
+// Gate per D5 (authoritative for this commit): a ruling persists only if
+// (1) verdict parses to exactly one of the four-value vocabulary, and
+// (2) convergence mode is known (attack_exhaustion or round_cap — stopReason
+// already carries this, since the loop's own termination reason IS the
+// convergence mode). escalate passes like any other verdict — not held.
+//
+// This check is a deliberate inline duplicate of week17/lib/ruling_gate.mjs
+// (checkRulingGate), which carries the same condition as a pure, independently
+// tested function — see week17/test/ruling_gate.test.mjs. Workflow scripts have
+// no filesystem/module access, so the logic can't be imported here; keep the
+// two in sync if this condition ever changes.
+
+phase('Ruling Persistence')
+
+const RULING_VERDICT_VOCAB = ['substantiated', 'partially', 'not_substantiated', 'escalate']
+const RULING_CONVERGENCE_VOCAB = ['attack_exhaustion', 'round_cap']
+
+const rulingArtifact = {
+  claim_id: CLAIM_ID,
+  verdict: synthesis.verdict,
+  rationale: synthesis.verdict_rationale,
+  convergence: stopReason,
+  rounds: roundsRun,
+}
+
+const verdictOk = typeof rulingArtifact.verdict === 'string' && RULING_VERDICT_VOCAB.includes(rulingArtifact.verdict)
+const convergenceOk = typeof rulingArtifact.convergence === 'string' && RULING_CONVERGENCE_VOCAB.includes(rulingArtifact.convergence)
+
+let rulingPersisted = false
+let rulingGateFailureReason = null
+let rulingId = null
+
+if (!verdictOk) {
+  rulingGateFailureReason = `verdict "${rulingArtifact.verdict}" is not one of: ${RULING_VERDICT_VOCAB.join(', ')}`
+} else if (!convergenceOk) {
+  rulingGateFailureReason = `convergence "${rulingArtifact.convergence}" is not one of: ${RULING_CONVERGENCE_VOCAB.join(', ')} — convergence mode unknown`
+}
+
+if (rulingGateFailureReason) {
+  log(`Ruling gate FAILED — not persisted: ${rulingGateFailureReason}`)
+} else {
+  log(`Ruling gate passed (verdict=${rulingArtifact.verdict}, convergence=${rulingArtifact.convergence}, rounds=${rulingArtifact.rounds}) — writing to review_rulings...`)
+
+  // written_by_session: no session identifier is exposed to a workflow script
+  // (no such global among args/budget/log/phase/agent/parallel/pipeline/workflow).
+  // append_claim's own contract is "supplied parameter, no inference, no default"
+  // (server/tools/append_claim.py) — followed here by passing null rather than
+  // fabricating an identifier. A null means unknown; a fabricated value would
+  // assert something false.
+  const writeResult = await agent(
+    `Write a review ruling to the Claims Desk MCP registry. This is a WRITE call — call append_ruling exactly once with the exact arguments given below, then return its result. Do not call any other write tool.
+
+Step 1: Use ToolSearch to load: select:mcp__6db17c1d-acf8-4170-bc36-12d3ce50766a__append_ruling
+
+Step 2: Call append_ruling with:
+  claim_id: "${rulingArtifact.claim_id}"
+  verdict: "${rulingArtifact.verdict}"
+  rationale: ${JSON.stringify(rulingArtifact.rationale)}
+  reviewed_by: "substantiation-adversary/v1"
+  convergence: "${rulingArtifact.convergence}"
+  rounds: ${rulingArtifact.rounds}
+  written_by_session: null
+
+Step 3: Return the tool's result verbatim as {ruling_id, claim_id}. If the call errors, return {error: "<the error message>"}.`,
+    {
+      label: 'ruling-write',
+      phase: 'Ruling Persistence',
+      schema: {
+        type: 'object',
+        properties: {
+          ruling_id: { type: 'string' },
+          claim_id: { type: 'string' },
+          error: { type: 'string' },
+        },
+      },
+    }
+  )
+
+  if (writeResult && writeResult.ruling_id) {
+    rulingPersisted = true
+    rulingId = writeResult.ruling_id
+    log(`Ruling persisted: ruling_id=${rulingId}`)
+  } else {
+    log(`Ruling write FAILED: ${writeResult && writeResult.error ? writeResult.error : 'no ruling_id returned'}`)
+  }
 }
 
 // ── Output report ─────────────────────────────────────────────────────────
@@ -610,6 +699,12 @@ return {
   rounds_run: roundsRun,
   stop_reason: stopReason,
   hygiene_checks: claimData.hygiene_checks || null,
+  ruling: {
+    persisted: rulingPersisted,
+    ruling_id: rulingId,
+    gate_failure_reason: rulingGateFailureReason,
+    artifact: rulingArtifact,
+  },
   instrumentation: {
     phase1_claim_fetch: {
       agent: 'claim-fetch',
