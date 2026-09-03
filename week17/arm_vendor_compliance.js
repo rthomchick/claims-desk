@@ -15,11 +15,11 @@ const CLAIM_ID = '8a27bae6-cb5d-454d-83c3-79d72eeb351e'
 
 const CLAIM_FETCH_SCHEMA = {
   type: 'object',
-  required: ['claim_text', 'claim_type', 'current_status', 'evidence_standard'],
+  required: ['claim_text', 'claim_type', 'verification', 'evidence_standard'],
   properties: {
     claim_text: { type: 'string' },
     claim_type: { type: 'string' },
-    current_status: { type: 'string' },
+    verification: { type: 'string' },
     evidence_standard: { type: 'string' },
     submitted_evidence: { type: 'array', items: { type: 'string' } },
     mcp_notes: { type: 'string' },
@@ -132,7 +132,7 @@ Step 3: Call check_substantiation with claim_id="${CLAIM_ID}" and note the full 
 Return structured data with:
 - claim_text: the actual marketing claim text from the registry
 - claim_type: the claim type (Superlative, Performance, Comparative, or Compliance)
-- current_status: the current workflow status from get_claim_status
+- verification: the verification verdict from get_claim_status
 - evidence_standard: the evidence standard the registry applies to this claim type (from check_substantiation)
 - submitted_evidence: list of any evidence items already submitted (from either tool result), as strings
 - mcp_notes: any other notable data such as assigned adjudicator, risk level, risk factors, hygiene check results, etc.`,
@@ -141,7 +141,7 @@ Return structured data with:
 const fetchTokens = budget.spent() - t0
 
 log(`Claim: "${claimData.claim_text}"`)
-log(`Type: ${claimData.claim_type} | Status: ${claimData.current_status}`)
+log(`Type: ${claimData.claim_type} | Verification: ${claimData.verification}`)
 log(`Evidence standard: ${claimData.evidence_standard}`)
 log(`Claim fetch: ~${fetchTokens} output tokens`)
 
