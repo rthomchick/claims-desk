@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import os
 
+import json
+
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -133,7 +135,8 @@ async def get_claim_by_slug(request: Request) -> Response:
     claim = fetchone_dict("select claim_id from claims where claim_slug = %s", (slug,))
     if claim is None:
         return JSONResponse({"error": f"no claim found with claim_slug {slug}"}, status_code=404)
-    return JSONResponse(_get_claim_status(claim["claim_id"]))
+    payload = json.dumps(_get_claim_status(claim["claim_id"]), default=str)
+    return Response(payload, media_type="application/json")
 
 
 if __name__ == "__main__":
