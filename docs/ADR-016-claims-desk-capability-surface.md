@@ -21,6 +21,8 @@ This is a greenfield build. The registry is seeded with claims for Kalder produc
 
 ## Decision 1: MCP vs. Agent Skills — The Split
 
+> **Note (Decision 6, 2026-09-03):** Decision 6 supersedes the *return shape* of `get_claim_status` and `check_substantiation` below — both stop returning `claims.status` and instead carry two derived fields, `verification` and `evidence_current`, computed at read time. The capability assignment itself (MCP vs. Skills, and which tool owns what) is unchanged. See `ADR-016-decision-6-addendum-ruling-persistence.md`.
+
 **The question:** For each Claims Desk capability, which primitive is the right home?
 
 **The framework:** Two questions determine the split.
@@ -137,6 +139,7 @@ Two positions were weighed:
 | 3 | Server hosting + SDK version | Local+tunnel / Railway / Vercel; v1.x / v2 beta | Railway; MCP Python SDK v1.x stable | Local+tunnel fails the Day 4 dual-client bar; Vercel's stateless advantage is moot on v1.x; Railway is zero incremental infrastructure. v2 beta is an unnecessary dependency risk for a one-week build |
 | 4 | Claim-type taxonomy + evidence standards | v1 scope; Skill vs. structured fields | 4 types (Performance, Comparative, Compliance, Superlative); deterministic/judgment field split within each type | FTC "reasonable basis" doctrine grounds all four; Aspirational and Environmental/Sustainability types explicitly deferred and documented, not silently excluded |
 | 5 | Repo structure | Per-build / monorepo / hybrid | Hybrid: `claims-desk` monorepo now, standalone `false-premise-eval` repo in Week 19 | Shared claim types defined once; harness's reusability premise requires it to stand apart, but not before it exists |
+| 6 | Ruling persistence and verification state | Widen both / widen ruling + lossy map / read from `latest_ruling` / that plus deprecate `claims.status` | Append-only `review_rulings`; `verification` and `evidence_current` derived on read; `claims.status` deprecated | `claims.status` packed two orthogonal dimensions under a partial mapping and had never held a non-default value; all reads go through the tool layer, so computed-on-read is consistent by construction |
 
 ---
 
@@ -147,6 +150,9 @@ Two positions were weighed:
 - **Legal advice posture:** the Claims Desk surfaces substantiation status; it does not render legal judgments. The taxonomy Skill states this boundary explicitly.
 - **Aspirational/roadmap claims and Environmental/Sustainability claims** (v1 taxonomy scope — see Decision 4): documented exclusions, not silent gaps. Candidates for a future v2 taxonomy revision if Week 17's adversary or later Kalder corpus work surfaces a concrete need.
 - **EU/national claim-substantiation regulation** (FTC serves as sole grounding source for v1): reviewed during Day 1 spec reading — EmpCo Directive (binding Sept 27, 2026), German UWG amendment and case law (BGH rulings on "klimaneutral" and offsetting claims), French transposition (proposed penalties up to 80% of ad spend) — all specific to environmental/sustainability claims, not a general stricter-substantiation regime. Consciously excluded given Kalder's B2B posture; German draft's B2B carve-out further narrows near-term relevance.
+- **Disposition column on `review_rulings`** (Decision 6): no writer produces a disposition (approve/reject) as distinct from a verdict; a repo-wide grep for `approve|reject|disposition` returns nothing outside parse docstrings. Shipping a nullable column now would be populated by nothing. Revisit when a writer that produces a disposition exists.
+- **Provenance column on `review_rulings`** (Decision 6): the reflex fix for eight fixture rulings found indistinguishable from real ones was a `provenance` column; rejected because the same code paths that wrote the fixtures would populate it, including in future test runs. Root cause was test isolation, and that is what was fixed — every test that writes now runs inside a rolled-back transaction. Revisit if a second legitimate writer (beyond the review instrument) appears.
+- **Materialized projections over `review_rulings`** (Decision 6): none built. Derive-on-read is not a cost at current claim volume, and the tool layer is the only reader. Revisit if claim count reaches a scale where a consumer needs to filter by verification state across the whole registry.
 
 ---
 
@@ -204,9 +210,17 @@ The `append_claim` silent-failure is itself a separate bug (a tool that returns 
 
 ### Known issue — review_rulings cascade (Week 18 hard prerequisite)
 
-`review_rulings_claim_id_fkey` also has ON DELETE CASCADE in the existing schema, meaning `delete_claim` currently wipes rulings alongside claims — contradicting the audit-trail preservation intent. Documented in `server/tools/delete_claim.py` with a Week 18 flag.
+> **[Superseded — see correction below.] Original text, preserved for the record:**
+>
+> ~~`review_rulings_claim_id_fkey` also has ON DELETE CASCADE in the existing schema, meaning `delete_claim` currently wipes rulings alongside claims — contradicting the audit-trail preservation intent. Documented in `server/tools/delete_claim.py` with a Week 18 flag.~~
+>
+> ~~**Must be fixed before the Week 18 review agent writes any rulings.** Fix options: make `claim_id` nullable + `SET NULL` on delete, or soft-delete claims rather than hard-deleting. This is a hard prerequisite for Week 18, not a soft backlog item.~~
 
-**Must be fixed before the Week 18 review agent writes any rulings.** Fix options: make `claim_id` nullable + `SET NULL` on delete, or soft-delete claims rather than hard-deleting. This is a hard prerequisite for Week 18, not a soft backlog item.
+**Correction (Decision 6, 2026-09-03):** This was wrong, and never true. Live introspection on 2026-09-02 found that `review_rulings_claim_id_fkey` has **no `ON DELETE` clause at all** — it is `NO ACTION`, not `CASCADE`. `schema.sql` carries the inline comment `-- no cascade: rulings survive a soft-deleted claim (d1)`, and `delete_claim.py`'s docstring documents the absence as deliberate. There was no Week 18 hard prerequisite; none of the "must be fixed" language above ever applied.
+
+`NO ACTION` is the correct behavior under Decision 6's append-only design: a hard delete of a claim with rulings fails loudly, and a soft delete leaves rulings intact. See `ADR-016-decision-6-addendum-ruling-persistence.md`.
+
+This section is the upstream source of the same error appearing in downstream planning documents, including the project's standing instructions and Week 20's own planning. Those should be treated as carrying the same correction.
 
 ### Also in this commit
 
