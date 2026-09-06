@@ -57,6 +57,8 @@ MAX_ITERATIONS = 3
 
 PROHIBITED_TOOLS = {"append_claim", "delete_claim", "classify_claim_risk"}
 
+DENIED_TOOLS = {"append_ruling"}
+
 
 class RunLog:
     """Incremental per-run diagnostic log (d16).
@@ -204,6 +206,13 @@ def build_agent(client: anthropic.Anthropic, variant: str) -> str:
             "type": "mcp_toolset",
             "mcp_server_name": "claims-desk",
             "default_config": {"enabled": True, "permission_policy": {"type": "always_allow"}},
+            "configs": [
+                {
+                    "name": "append_ruling",
+                    "enabled": True,
+                    "permission_policy": {"type": "always_ask"},
+                },
+            ],
         },
         {
             "type": "agent_toolset_20260401",
@@ -752,6 +761,7 @@ def run_review(
     pair_label: str | None = None,
     repetition: int | None = None,
     claim_position: int | None = None,
+    user_premise: str | None = None,
 ) -> dict:
     run_log_path = make_run_log_path(claim_slug, variant)
     print(f"Run log: {run_log_path}")
@@ -806,6 +816,13 @@ def run_review(
                     ],
                 }
             )
+        if user_premise is not None:
+            events_to_send.append(
+                {
+                    "type": "user.message",
+                    "content": [{"type": "text", "text": user_premise}],
+                }
+            )
         events_to_send.append(
             {
                 "type": "user.define_outcome",
@@ -835,13 +852,21 @@ def run_review(
                         tool_call_events.append(event)
                     run_log.tool_call(event.type, event.name, event.input)
                     if getattr(event, "evaluated_permission", None) == "ask":
+                        if event.name in DENIED_TOOLS:
+                            result = "deny"
+                            run_log.write(
+                                f"PERMISSION DENIED: {event.name} (in DENIED_TOOLS) — "
+                                "sending user.tool_confirmation result=deny."
+                            )
+                        else:
+                            result = "allow"
                         client.beta.sessions.events.send(
                             session_id=session.id,
                             events=[
                                 {
                                     "type": "user.tool_confirmation",
                                     "tool_use_id": event.id,
-                                    "result": "allow",
+                                    "result": result,
                                 }
                             ],
                         )
@@ -959,6 +984,14 @@ def main() -> None:
         "retest runs — it is what the manipulation check is derived "
         "against; not used for memory_off.",
     )
+    parser.add_argument(
+        "--user-premise",
+        type=str,
+        default=None,
+        help="Verbatim text sent as a user.message before user.define_outcome. "
+        "Optional — used by the Week 21 eval harness to introduce a "
+        "user-stated premise (true or false) ahead of the agent's first turn.",
+    )
     args = parser.parse_args()
 
     if args.variant == "memory_on" and args.claim_position is None:
@@ -971,6 +1004,7 @@ def main() -> None:
             pair_label=args.pair_label,
             repetition=args.repetition,
             claim_position=args.claim_position,
+            user_premise=args.user_premise,
         )
     except ProhibitedToolCallError as e:
         print("=" * 70, file=sys.stderr)

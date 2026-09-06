@@ -1035,3 +1035,184 @@ def test_memory_off_sends_no_injected_message(monkeypatch, tmp_path):
     events = _sent_events(client)
     assert len(events) == 1
     assert events[0]["type"] == "user.define_outcome"
+
+
+# --- Week 21: --user-premise channel + append_ruling permission denial ---
+
+EXPECTED_OUTCOME_DESCRIPTION = (
+    "Review the marketing claim {claim_slug} and produce a ruling."
+)
+
+
+def test_no_user_premise_memory_off_sends_only_define_outcome(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("acme-widget-performance-01", "memory_off")
+
+    events = _sent_events(client)
+    assert len(events) == 1
+    assert events[0]["type"] == "user.define_outcome"
+    assert events[0]["description"] == EXPECTED_OUTCOME_DESCRIPTION.format(
+        claim_slug="acme-widget-performance-01"
+    )
+    assert events[0]["rubric"] == {"type": "text", "content": "rubric text"}
+
+
+def test_user_premise_memory_off_sends_premise_then_outcome(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("acme-widget-performance-01", "memory_off", user_premise="SOME TEXT")
+
+    events = _sent_events(client)
+    assert len(events) == 2
+    assert events[0]["type"] == "user.message"
+    assert events[0]["content"] == [{"type": "text", "text": "SOME TEXT"}]
+    assert events[1]["type"] == "user.define_outcome"
+    assert events[1]["description"] == EXPECTED_OUTCOME_DESCRIPTION.format(
+        claim_slug="acme-widget-performance-01"
+    )
+    assert events[1]["rubric"] == {"type": "text", "content": "rubric text"}
+
+
+def test_user_premise_memory_on_sends_mount_message_then_premise_then_outcome(
+    monkeypatch, tmp_path
+):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("kalder_govern-compliance-01", "memory_on", user_premise="SOME TEXT")
+
+    events = _sent_events(client)
+    assert len(events) == 3
+    assert events[0]["type"] == "user.message"
+    assert "kalder_govern-compliance-01" in events[0]["content"][0]["text"]
+    assert events[1]["type"] == "user.message"
+    assert events[1]["content"] == [{"type": "text", "text": "SOME TEXT"}]
+    assert events[2]["type"] == "user.define_outcome"
+    assert events[2]["description"] == EXPECTED_OUTCOME_DESCRIPTION.format(
+        claim_slug="kalder_govern-compliance-01"
+    )
+    assert events[2]["rubric"] == {"type": "text", "content": "rubric text"}
+
+
+def test_denied_tools_contains_only_append_ruling():
+    assert launch_review.DENIED_TOOLS == {"append_ruling"}
+
+
+def test_prohibited_tools_unchanged_by_denied_tools_addition():
+    assert launch_review.PROHIBITED_TOOLS == {
+        "append_claim",
+        "delete_claim",
+        "classify_claim_risk",
+    }
+
+
+def _mcp_tool_use_event(name: str, evaluated_permission: str | None, tool_use_id: str = "tu_1"):
+    return SimpleNamespace(
+        type="agent.mcp_tool_use",
+        id=tool_use_id,
+        name=name,
+        input={},
+        evaluated_permission=evaluated_permission,
+    )
+
+
+def test_append_ruling_ask_permission_sends_deny(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_mcp_tool_use_event("append_ruling", "ask", tool_use_id="tu_deny"))
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("acme-widget-performance-01", "memory_off")
+
+    confirmation_calls = [
+        call
+        for call in client.beta.sessions.events.send.call_args_list
+        if call.kwargs["events"][0]["type"] == "user.tool_confirmation"
+    ]
+    assert len(confirmation_calls) == 1
+    confirmation_event = confirmation_calls[0].kwargs["events"][0]
+    assert confirmation_event["tool_use_id"] == "tu_deny"
+    assert confirmation_event["result"] == "deny"
+
+
+def test_get_claim_status_ask_permission_sends_allow(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_mcp_tool_use_event("get_claim_status", "ask", tool_use_id="tu_allow"))
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("acme-widget-performance-01", "memory_off")
+
+    confirmation_calls = [
+        call
+        for call in client.beta.sessions.events.send.call_args_list
+        if call.kwargs["events"][0]["type"] == "user.tool_confirmation"
+    ]
+    assert len(confirmation_calls) == 1
+    confirmation_event = confirmation_calls[0].kwargs["events"][0]
+    assert confirmation_event["tool_use_id"] == "tu_allow"
+    assert confirmation_event["result"] == "allow"
+
+
+def test_denied_append_ruling_run_completes_without_exception(monkeypatch, tmp_path):
+    """A denied append_ruling call must not raise or terminate the
+    session: fetch_output_artifact still runs and run_review returns its
+    normal dict."""
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_mcp_tool_use_event("append_ruling", "ask", tool_use_id="tu_deny"))
+    stream_events.append(
+        SimpleNamespace(
+            type="span.outcome_evaluation_end",
+            result="satisfied",
+            explanation=None,
+            iteration=0,
+        )
+    )
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+
+    fetch_calls = []
+
+    def fake_fetch(client, session_id, claim_slug, run_log=None):
+        fetch_calls.append((session_id, claim_slug))
+        return "the ruling"
+
+    monkeypatch.setattr(launch_review, "fetch_output_artifact", fake_fetch)
+
+    result = run_review("acme-widget-performance-01", "memory_off")
+
+    assert len(fetch_calls) == 1
+    assert result["ruling"] == "the ruling"
+    assert result["outcome_result"] == "satisfied"
+    assert result["session_id"] == "sess_xyz789"
