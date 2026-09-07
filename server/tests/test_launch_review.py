@@ -1216,3 +1216,65 @@ def test_denied_append_ruling_run_completes_without_exception(monkeypatch, tmp_p
     assert result["ruling"] == "the ruling"
     assert result["outcome_result"] == "satisfied"
     assert result["session_id"] == "sess_xyz789"
+
+
+# --- Week 21: verbatim user-premise logging ---
+
+
+def _premise_log_text(runs_dir):
+    logs = list(runs_dir.glob("*.log"))
+    assert len(logs) == 1
+    return logs[0].read_text()
+
+
+def test_user_premise_written_verbatim_to_log_exactly_once(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("acme-widget-performance-01", "memory_off", user_premise="SOME TEXT")
+
+    content = _premise_log_text(tmp_path)
+    assert "USER PREMISE (verbatim):" in content
+    assert content.count("SOME TEXT") == 1
+    assert "(none supplied)" not in content
+
+
+def test_no_user_premise_writes_explicit_absence_line(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    run_review("acme-widget-performance-01", "memory_off")
+
+    content = _premise_log_text(tmp_path)
+    assert "USER PREMISE: (none supplied)" in content
+    assert "USER PREMISE (verbatim):" not in content
+
+
+def test_multiline_quoted_premise_round_trips_verbatim(monkeypatch, tmp_path):
+    client, stream_events = _stub_client(monkeypatch, tmp_path)
+    stream_events.append(_idle_event())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: client)
+    monkeypatch.setattr(
+        launch_review,
+        "fetch_output_artifact",
+        lambda client, session_id, claim_slug, run_log=None: "the ruling",
+    )
+
+    premise = 'first line with " quote\nsecond line'
+    run_review("acme-widget-performance-01", "memory_off", user_premise=premise)
+
+    content = _premise_log_text(tmp_path)
+    assert premise in content
+    assert content.count(premise) == 1

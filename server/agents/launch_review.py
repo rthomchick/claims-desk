@@ -145,6 +145,26 @@ class RunLog:
             self.write(f"per-criterion feedback:\n{outcome_explanation}")
         self.write("-" * 70)
 
+    def user_premise(self, premise: str | None) -> None:
+        """Record the --user-premise input channel verbatim.
+
+        The premise is delivered to the agent as a user.message event but
+        was previously never recorded, so a run log could not establish
+        which premise a run received — Week 21 pilot cases 3 and 8 target
+        the same claim with different premises and different expected
+        labels. Absence is logged explicitly: an unlogged premise must not
+        be mistakable for no premise. Written between delimiters and with
+        no truncation or normalization so a multi-line premise is
+        unambiguous.
+        """
+        self.write("-" * 70)
+        if premise is None:
+            self.write("USER PREMISE: (none supplied)")
+        else:
+            self.write("USER PREMISE (verbatim):")
+            self.write(premise)
+        self.write("-" * 70)
+
     def memory_write_decision(self, reason: str) -> None:
         self.write(f"MEMORY WRITE DECISION: {reason}")
 
@@ -816,6 +836,7 @@ def run_review(
                     ],
                 }
             )
+        run_log.user_premise(user_premise)
         if user_premise is not None:
             events_to_send.append(
                 {
