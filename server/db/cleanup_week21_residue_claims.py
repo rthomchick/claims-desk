@@ -11,7 +11,7 @@ underlying claims rows (and the evidence_links rows attached to some of
 them) were never removed. This script is that removal.
 
 Provenance of the 51. All identified and classified in the residue audit
-at scratchpad/claims_residue_report.md (2026-09-05), which partitions every
+at docs/week21_claims_residue_report.md (2026-09-05), which partitions every
 row in claims into REAL / RESIDUE / UNCLEAR and accounts for all 71 rows
 in the table. 50 of the 51 ids below are that report's RESIDUE group
 verbatim. The 51st, kalder_resolve-performance-06 (claim_id
@@ -34,7 +34,7 @@ rule; it is an ordinary delete against a table with no append-only
 contract, gated by the safety checks below instead.
 
 Provenance of the 51 ids. Copied verbatim from
-scratchpad/claims_residue_report.md's RESIDUE list plus performance-06 as
+docs/week21_claims_residue_report.md's RESIDUE list plus performance-06 as
 described above. Ordered by created_at, as in that report.
 """
 
@@ -47,7 +47,7 @@ from psycopg2.extras import RealDictCursor
 from server.db.client import get_connection
 
 # The 51 residue claims, by explicit claim_id, from
-# scratchpad/claims_residue_report.md (RESIDUE group, 50 ids) plus
+# docs/week21_claims_residue_report.md (RESIDUE group, 50 ids) plus
 # kalder_resolve-performance-06 (see module docstring).
 RESIDUE_CLAIM_IDS = (
     "9364f4d2-040c-4bdf-9eb8-edc4c81e34bf",  # kalder_resolve/performance  2026-08-27 03:28:24  delete_claim test
