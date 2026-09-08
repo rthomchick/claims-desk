@@ -1,18 +1,22 @@
 <!--
 review_agent_template.md — single source of truth for the Claims Review
-Agent system prompt (Week 18 d7). Rendered into two committed variants by
+Agent system prompt (Week 18 d7; GUIDANCE axis added Week 21 for
+Endpoint 2). Rendered into three committed variants by
 generate_variants.py:
-  - review_agent_memory_on.md
-  - review_agent_memory_off.md
+  - review_agent_memory_on.md               (MEMORY:ON,  GUIDANCE:ON)
+  - review_agent_memory_off.md              (MEMORY:OFF, GUIDANCE:ON)
+  - review_agent_memory_off_stripped.md     (MEMORY:OFF, GUIDANCE:OFF)
 
-Exactly one conditional block controls all Memory-related content, marked
-by the MEMORY:ON / MEMORY:OFF sentinel pairs below. Everything outside
-those sentinels is byte-identical between the two rendered outputs — this
-is what makes `git diff` between the generated files a real drift check
-(d7's stated safety mechanism), not a formality.
+Two independent conditional axes control this template, each marked by
+its own sentinel comment pairs: MEMORY:ON / MEMORY:OFF, and GUIDANCE:ON /
+GUIDANCE:OFF. Everything outside a given axis's sentinels is byte-identical
+across that axis's variants — this is what makes `git diff` between the
+generated files a real drift check (d7's stated safety mechanism), not a
+formality.
 
-Do not add a second conditional block. Do not reference Memory anywhere
-outside the MEMORY:ON block, including in prose that isn't inside the
+Do not add a third conditional axis. Do not reference Memory anywhere
+outside the MEMORY:ON block, or reasoning/evidence-judgment guidance
+outside the GUIDANCE:ON block, including in prose that isn't inside the
 sentinels — the generator does not scan for that; it only strips marked
 regions.
 -->
