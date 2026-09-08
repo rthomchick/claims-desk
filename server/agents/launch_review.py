@@ -49,6 +49,7 @@ OUTPUT_FILE_RETRY_DELAYS = (1.5, 1.5)
 PROMPT_FILES = {
     "memory_on": AGENTS_DIR / "review_agent_memory_on.md",
     "memory_off": AGENTS_DIR / "review_agent_memory_off.md",
+    "memory_off_stripped": AGENTS_DIR / "review_agent_memory_off_stripped.md",
 }
 RUBRIC_FILE = AGENTS_DIR / "review_rubric.md"
 
@@ -657,7 +658,7 @@ def derive_manipulation_check(
     probed = trace_probed_memory_mount(tool_call_events, mount_path) if mount_path else False
     found = artifact_found_prior_ruling(ruling_text)
 
-    if variant == "memory_off":
+    if variant in ("memory_off", "memory_off_stripped"):
         if probed:
             return "void:memory_off_probed"
         return "pass:no_probe"
@@ -978,7 +979,7 @@ def main() -> None:
     parser.add_argument(
         "--variant",
         required=True,
-        choices=["memory_on", "memory_off"],
+        choices=["memory_on", "memory_off", "memory_off_stripped"],
         help="Memory configuration — no default, explicit choice required.",
     )
     parser.add_argument(
