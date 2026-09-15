@@ -94,10 +94,9 @@ the thesis ADR-016 tests is *Skills carry reasoning, MCP carries action*.
 - **`claim-taxonomy`** — reference: the five claim types and their evidence
   standards, split into deterministic and judgment fields per type.
 
-Each lives at both `skills/<name>/` (authored source of truth) and
-`.claude/skills/<name>/` (Claude Code's project-skill discovery path).
-Both copies are required: Claude Code does not discover skills from a
-top-level `skills/` directory.
+Each lives at `.claude/skills/<name>/`, which is Claude Code's
+project-skill discovery path — skills placed in a top-level `skills/`
+directory are not discovered.
 
 ## Claim taxonomy
 
@@ -210,9 +209,9 @@ server/
   tools/           one module per tool
   db/              schema, client, migrations, cleanup scripts
   agents/          review agent, prompt variants, retest harness
-  tests/           115 passing; 9 need a live DB
+  tests/           124 passing; 9 need a live DB
   seed/            12 Kalder seed claims
-skills/            authored Skills (mirrored to .claude/skills/)
+.claude/skills/    the two Agent Skills (Claude Code discovery path)
 docs/              ADR-016 + addenda, investigation reports
 week17/            substantiation adversary
 ```
