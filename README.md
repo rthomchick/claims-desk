@@ -36,11 +36,8 @@ and no application code is implicated. Restoring the project from the
 Supabase dashboard brings the whole surface back in a few minutes. Expect
 this to recur whenever the project sits idle.
 
-Two other things a reader should know before trusting this tree:
+One other thing a reader should know before trusting this tree:
 
-- `server/smoke_test.py` is stale. It asserts a five-tool list and now
-  fails against the seven registered tools. The failure is the assertion,
-  not the server.
 - `retest_sessions.criterion_scores` was never populated — it is written as
   a hard-coded `None`. Per-criterion agreement scoring can't be computed
   from the table as it stands. See
