@@ -1,6 +1,7 @@
 .env
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv/
 venv/
 
@@ -12,3 +13,8 @@ venv/
 runs/
 
 **/.DS_Store
+
+# Per-machine Claude Code settings. Note that .claude/skills/ IS tracked
+# deliberately (it is Claude Code's project-skill discovery path, and the
+# skills are a product surface) — only this local settings file is excluded.
+.claude/settings.local.json
